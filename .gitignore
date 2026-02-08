@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+#! De momento ignoramos los modelos, labels y datasets, que ocupan demasiado como para subirlos a GitHub (no subir hasta reducir tamaño de datasets)
+src/data/datasets/*
+src/data/labels/*
+src/data/models/*
