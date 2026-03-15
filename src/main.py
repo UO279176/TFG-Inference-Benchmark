@@ -1,20 +1,20 @@
 import sys
 from data import Accelerator, Model, MODEL_RESOURCES
 from pathlib import Path
-import tensorflow as tf
-import tensorflow.keras as keras # type: ignore
+from transformers import AutoModel
+import torch
 
 accelerators_str = [acc.value for acc in Accelerator]
 models_str = [model.value for model in Model]
 
-def loadModel(model_relative_path: str):
+def loadModel(model_relative_path: str, device: torch.device):
     try:
         model_absolute_path = Path(__file__).resolve().parent.parent / model_relative_path
         if not model_absolute_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {model_absolute_path}")
         
-        model = keras.models.load_model(model_absolute_path)
-        model.summary()  # Imprime un resumen del modelo para verificar que se ha cargado correctamente
+        model = AutoModel.from_pretrained(str(model_absolute_path))
+        model.to(device)
         print("Modelo cargado exitosamente")
         return model
     except Exception as e:
@@ -31,11 +31,19 @@ if __name__ == "__main__":
     resources = MODEL_RESOURCES[model_identifier]
 
     print(f"Nombre: {model_identifier.value}")
-    print(f"Ruta modelo: {resources.model_path}")
+    print(f"Ruta modelo: {resources.model_folder_path}")
     print(f"Ruta dataset: {resources.dataset_path}")
     print(f"Ruta labels: {resources.labels_path}")
     
     if accelerator_identifier == Accelerator.CPU:
         print("Ejecutando en CPU")
-        with tf.device("/cpu:0"):
-            new_model = loadModel(resources.model_path)
+        device = torch.device("cpu")
+        new_model = loadModel(resources.model_folder_path, device)
+    elif accelerator_identifier == Accelerator.GPU:
+        print("Ejecutando en GPU")
+        if not torch.cuda.is_available():
+            print("No se encontró una GPU con CUDA disponible")
+            sys.exit(1)
+            
+        device = torch.device("cuda")
+        new_model = loadModel(resources.model_folder_path, device)

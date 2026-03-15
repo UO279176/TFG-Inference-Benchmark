@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ModelResources:
-    model_path: str
+    model_folder_path: str
     labels_path: str | None
     dataset_path: str
 
@@ -24,27 +24,27 @@ class Model(Enum):
 # Asociación de cada modelo con sus recursos
 MODEL_RESOURCES = {
     Model.RESNET50: ModelResources(
-        model_path="src/data/models/resnet50.h5",
+        model_folder_path="src/data/models/resnet50",
         labels_path="src/data/labels/imagenet_labels.txt",
         dataset_path="src/data/datasets/imagenet_224"
     ),
     Model.RETINANET: ModelResources(
-        model_path="",
+        model_folder_path="",
         labels_path=None,
         dataset_path=""
     ),
     Model.GPT_J: ModelResources(
-        model_path="",
+        model_folder_path="",
         labels_path=None,
         dataset_path=""
     ),
     Model.SDXL: ModelResources(
-        model_path="",
+        model_folder_path="",
         labels_path=None,
         dataset_path=""
     ),
     Model.RNNT: ModelResources(
-        model_path="",
+        model_folder_path="",
         labels_path=None,
         dataset_path=""
     )
