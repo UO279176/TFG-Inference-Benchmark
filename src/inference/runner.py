@@ -16,6 +16,23 @@ class InferenceRunner:
 
         for sample in samples:
             predictions = self.model_pipeline.infer(sample=sample, top_k=top_k)
-            print(f"\nImagen: {sample.path.name}")
-            for rank, (class_index, score, label) in enumerate(predictions, start=1):
-                print(f"{rank}. [{class_index}] {label} -> {score:.4f}")
+            print(f"\nMuestra: {sample.path.name}")
+            if not predictions:
+                print("Sin predicciones para esta muestra")
+                continue
+
+            for rank, prediction in enumerate(predictions, start=1):
+                print(f"{rank}. {self._format_prediction(prediction)}")
+
+    def _format_prediction(self, prediction: object) -> str:
+        class_index, label, score = "?", "?", -1.0
+        
+        if isinstance(prediction, tuple) and len(prediction) == 3:
+            class_index, score, label = prediction
+
+        if isinstance(prediction, dict):
+            class_index = prediction.get("class_index", prediction.get("class_index", "?"))
+            label = prediction.get("label", "?")
+            score = prediction.get("score", prediction.get("confidence", -1.0))
+
+        return f"[{class_index}] {label} -> {score:.4f}"

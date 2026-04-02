@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 import torch
 from PIL import Image
@@ -23,18 +23,18 @@ class ModelPipeline(Protocol):
         """Cargar el modelo y cualquier recurso necesario (ej. etiquetas)."""
         ...
 
-    def preprocess(self, sample: ImageSample) -> dict[str, torch.Tensor]:
+    def preprocess(self, sample: ImageSample) -> dict[str, Any]:
         """Convertir la imagen de entrada en los tensores que el modelo espera como input."""
         ...
 
-    def predict(self, model_inputs: dict[str, torch.Tensor]) -> torch.Tensor:
+    def predict(self, model_inputs: dict[str, Any]) -> Any:
         """Ejecutar la inferencia en el modelo y devolver los logits (salidas crudas)."""
         ...
 
-    def decode(self, logits: torch.Tensor, top_k: int = 5) -> list[tuple[int, float, str]]:
-        """Convertir los logits en una lista de tuplas (class_index, score, label) para las top_k predicciones."""
+    def decode(self, logits: Any, top_k: int = 5) -> Sequence[Any]:
+        """Convertir la salida cruda del modelo en predicciones legibles para top_k."""
         ...
 
-    def infer(self, sample: ImageSample, top_k: int = 5) -> list[tuple[int, float, str]]:
+    def infer(self, sample: ImageSample, top_k: int = 5) -> Sequence[Any]:
         """Ejecutar el pipeline completo de inferencia: preprocess -> predict -> decode."""
         ...

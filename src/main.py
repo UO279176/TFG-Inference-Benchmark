@@ -19,8 +19,6 @@ def resolve_device(accelerator_identifier: Accelerator) -> torch.device:
 
     if accelerator_identifier == Accelerator.GPU:
         print("Ejecutando en GPU")
-        if not torch.cuda.is_available():
-            raise RuntimeError("No se encontró una GPU con CUDA disponible")
         return torch.device("cuda")
 
     raise NotImplementedError(f"Acelerador no soportado por el runner actual: {accelerator_identifier.value}")
@@ -53,7 +51,7 @@ if __name__ == "__main__":
         dataset_adapter = build_dataset_adapter(resources=resources, project_root=project_root)
 
         runner = InferenceRunner(model_pipeline=model_pipeline, dataset_adapter=dataset_adapter)
-        runner.run_preview(max_samples=2, top_k=5)
+        runner.run_preview(max_samples=3, top_k=5)
 
         print("\nInferencia completada exitosamente")
     except Exception as e:
