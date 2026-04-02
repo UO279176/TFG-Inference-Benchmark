@@ -25,6 +25,8 @@ class ResNet50Pipeline:
         self.model = None
         self.labels = self._load_labels()
         self.image_size = 224
+        
+        # Normalización estándar para modelos preentrenados en ImageNet
         self.mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(3, 1, 1)
         self.std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(3, 1, 1)
 
@@ -130,6 +132,7 @@ class RetinaNetPipeline:
         print(f"Preprocesando muestra: {sample.path}")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
+        
         tensor = self._image_to_tensor(sample)
         batch = tf.expand_dims(tensor, axis=0)
         return {"input_tensor": batch}
@@ -166,6 +169,7 @@ class RetinaNetPipeline:
     def _resolve_label_for_class(self, class_id: int) -> str:
         if 0 <= class_id < len(self.labels):
             return self.labels[class_id]
+        
         return f"class_{class_id}"
 
     def decode(self, logits: object, top_k: int = 5) -> list[dict[str, object]]:
