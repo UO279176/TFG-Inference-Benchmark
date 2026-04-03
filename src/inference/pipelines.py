@@ -1,12 +1,13 @@
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
-from transformers import AutoModelForImageClassification
+from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizer
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
 
-from inference.contracts import ImageSample
+from inference.contracts import ImageSample, TextSample
 
 # Silencia los logs de UNEXPECTED keys
 hf_logging.set_verbosity_error()
@@ -227,3 +228,120 @@ class RetinaNetPipeline:
         return self.decode(detections, top_k=top_k)
 
 
+class TinyLlamaPipeline:
+    def __init__(
+        self,
+        model_folder_path: Path,
+        labels_path: Path | None,
+        device: torch.device
+    ):
+        self.model_folder_path = model_folder_path
+        self.device = device
+        self.model: Any = None
+        self.tokenizer: Any = None
+        self.max_input_chars = 1200
+        self.max_output_tokens = 50
+
+    def load(self) -> None:
+        print(f"Cargando modelo desde: {self.model_folder_path}")
+        if not self.model_folder_path.exists():
+            raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
+
+        try:
+            self.tokenizer = LlamaTokenizer.from_pretrained(
+                str(self.model_folder_path),
+                local_files_only=True,
+            )
+        except Exception as tokenizer_error:
+            raise RuntimeError(f"Error al cargar el tokenizer de TinyLlama: {tokenizer_error}")
+
+        # Configurar pad token si no existe
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        
+        self.model = AutoModelForCausalLM.from_pretrained(
+            str(self.model_folder_path),
+            torch_dtype=torch.float32,
+            local_files_only=True,
+        )
+        self.model.to(self.device)
+        self.model.eval()
+        print("Modelo cargado exitosamente")
+
+    def preprocess(self, sample: TextSample) -> dict[str, Any]:
+        print(f"Preprocesando muestra: {sample.path}")
+        tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
+        if tokenizer is None:
+            raise RuntimeError("El modelo todavía no está cargado")
+
+        prompt_text = sample.prompt[:self.max_input_chars]
+        prompt = f"Summarize the following news article:\n\n{prompt_text}"
+        tokenized_inputs = tokenizer(prompt, return_tensors="pt", truncation=True).to(self.device)
+        input_length = tokenized_inputs["input_ids"].shape[1]
+        return {
+            "input_ids": tokenized_inputs["input_ids"],
+            "attention_mask": tokenized_inputs["attention_mask"],
+            "input_length": torch.tensor([input_length], device=self.device)
+        }
+
+    def predict(self, model_inputs: dict[str, Any]) -> dict[str, torch.Tensor]:
+        print("Ejecutando inferencia en el modelo")
+        model = self.model # Guardamos en variable local para evitar problemas de acceso
+        tokenizer = self.tokenizer
+        if model is None or tokenizer is None:
+            raise RuntimeError("El modelo todavía no está cargado")
+
+        with torch.inference_mode():
+            output_ids = model.generate(
+                model_inputs["input_ids"],
+                attention_mask=model_inputs["attention_mask"],
+                min_new_tokens=8,
+                max_new_tokens=self.max_output_tokens,
+                temperature=0, # Determinista
+                do_sample=False, # Greedy decoding
+                pad_token_id=tokenizer.eos_token_id,
+                return_dict_in_generate=False,
+            )
+
+        if not isinstance(output_ids, torch.Tensor):
+            raise RuntimeError("TinyLlama devolvió un formato de generación no soportado")
+
+        return {
+            "output_ids": output_ids,
+            "input_length": model_inputs["input_length"]
+        }
+
+    def decode(self, logits: dict[str, Any], top_k: int = 5) -> list[dict[str, object]]:
+        print("Decodificando resultados de inferencia")
+        tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
+        if tokenizer is None:
+            raise RuntimeError("El modelo todavía no está cargado")
+
+        if "output_ids" not in logits or "input_length" not in logits:
+            raise ValueError("Formato de salida no soportado en TinyLlama")
+
+        output_ids = logits["output_ids"]
+        input_length = int(logits["input_length"][0].item())
+
+        continuation_ids = output_ids[0][input_length:]
+        continuation_text = tokenizer.decode(continuation_ids, skip_special_tokens=True).strip()
+
+        if continuation_text:
+            display_text = continuation_text
+        else:
+            full_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+            display_text = full_text if full_text else "[sin texto generado]"
+
+        predictions: list[dict[str, object]] = [
+            {
+                "text": display_text
+            }
+        ]
+
+        return predictions
+
+    def infer(self, sample: TextSample, top_k: int = 5) -> list[dict[str, object]]:
+        print(f"Inferiendo muestra: {sample.path}")
+        model_inputs = self.preprocess(sample)
+        output_ids = self.predict(model_inputs)
+        return self.decode(output_ids, top_k=top_k)

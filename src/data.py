@@ -20,13 +20,15 @@ class Accelerator(Enum):
 class Model(Enum):
     RESNET50 = "resnet50"
     RETINANET = "retinanet"
-    GPT_J = "gpt-j"
-    SDXL = "sdxl"
+    TINYLLAMA = "tinyllama"
+    STABLE_DIFFUSION = "stable_diffusion"
     RNNT = "rnnt"
 
 class Dataset(Enum):
     IMAGENET = "imagenet"
     OPENIMAGES = "openimages"
+    CNN_DAILYMAIL_NEWS = "cnn_dailymail_news"
+    LIBRISPEECH = "librispeech"
 
 # Asociación de cada modelo con sus recursos
 MODEL_RESOURCES = {
@@ -42,13 +44,13 @@ MODEL_RESOURCES = {
         dataset=Dataset.OPENIMAGES,
         dataset_folder_path="src/data/datasets/openimages"
     ),
-    Model.GPT_J: ModelResources(
-        model_folder_path="",
+    Model.TINYLLAMA: ModelResources(
+        model_folder_path="src/data/models/tinyllama",
         labels_path=None,
-        dataset=None,
-        dataset_folder_path=""
+        dataset=Dataset.CNN_DAILYMAIL_NEWS,
+        dataset_folder_path="src/data/datasets/cnn_dailymail_news"
     ),
-    Model.SDXL: ModelResources(
+    Model.STABLE_DIFFUSION: ModelResources(
         model_folder_path="",
         labels_path=None,
         dataset=None,

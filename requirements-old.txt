@@ -1,1 +1,2 @@
-transformers==4.18.0
+transformers==4.18.0 # Ejecución para todos los modelos
+sentencepiece==0.1.99 # Para el tokenizador de TinyLlama
