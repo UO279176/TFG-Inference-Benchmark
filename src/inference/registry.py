@@ -5,19 +5,21 @@ import torch
 
 from data import Dataset, Model, ModelResources
 from inference.contracts import DatasetAdapter, ModelPipeline
-from inference.datasets import CnnDailyMailDataset, ImageNetFolderDataset, OpenImagesFolderDataset
-from inference.pipelines import ResNet50Pipeline, RetinaNetPipeline, TinyLlamaPipeline
+from inference.datasets import CnnDailyMailDataset, ImageNetFolderDataset, OpenImagesFolderDataset, StableDiffusionPromptsDataset
+from inference.pipelines import ResNet50Pipeline, RetinaNetPipeline, TinyLlamaPipeline, StableDiffusion15Pipeline
 
 MODEL_PIPELINE_REGISTRY: dict[Model, Callable[..., ModelPipeline]] = {
     Model.RESNET50: ResNet50Pipeline,
     Model.RETINANET: RetinaNetPipeline,
-    Model.TINYLLAMA: TinyLlamaPipeline
+    Model.TINYLLAMA: TinyLlamaPipeline,
+    Model.STABLE_DIFFUSION: StableDiffusion15Pipeline,
 }
 
 DATASET_ADAPTER_REGISTRY: dict[Dataset, Callable[..., DatasetAdapter]] = {
     Dataset.IMAGENET: ImageNetFolderDataset,
     Dataset.OPENIMAGES: OpenImagesFolderDataset,
-    Dataset.CNN_DAILYMAIL_NEWS: CnnDailyMailDataset
+    Dataset.CNN_DAILYMAIL_NEWS: CnnDailyMailDataset,
+    Dataset.STABLE_DIFFUSION_PROMPTS: StableDiffusionPromptsDataset,
 }
 
 

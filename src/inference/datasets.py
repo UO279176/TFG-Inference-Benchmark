@@ -77,3 +77,32 @@ class CnnDailyMailDataset:
                     break
 
         return samples
+
+
+class StableDiffusionPromptsDataset:
+    def __init__(self, dataset_folder_path: Path):
+        self.dataset_folder_path = dataset_folder_path
+
+    def iter_samples(self, limit: int | None = None) -> list[TextSample]:
+        print(f"Cargando muestras del dataset desde: {self.dataset_folder_path}")
+        if not self.dataset_folder_path.exists():
+            raise FileNotFoundError(f"No existe el dataset en la ruta: {self.dataset_folder_path}")
+
+        prompts_path = self.dataset_folder_path / "prompts.txt"
+        if not prompts_path.exists():
+            raise FileNotFoundError(f"No existe el archivo de prompts en la ruta: {prompts_path}")
+
+        samples: list[TextSample] = []
+        with prompts_path.open("r", encoding="utf-8") as prompts_file:
+            for line_number, raw_line in enumerate(prompts_file, start=1):
+                prompt = raw_line.strip()
+                if not prompt:
+                    continue
+
+                sample_id = f"prompt_{line_number:03d}"
+                samples.append(TextSample(path=Path(sample_id), prompt=prompt))
+
+                if limit is not None and len(samples) >= limit:
+                    break
+
+        return samples

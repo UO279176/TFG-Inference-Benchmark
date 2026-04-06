@@ -29,6 +29,7 @@ class Dataset(Enum):
     OPENIMAGES = "openimages"
     CNN_DAILYMAIL_NEWS = "cnn_dailymail_news"
     LIBRISPEECH = "librispeech"
+    STABLE_DIFFUSION_PROMPTS = "stable_diffusion_prompts"
 
 # Asociación de cada modelo con sus recursos
 MODEL_RESOURCES = {
@@ -51,10 +52,10 @@ MODEL_RESOURCES = {
         dataset_folder_path="src/data/datasets/cnn_dailymail_news"
     ),
     Model.STABLE_DIFFUSION: ModelResources(
-        model_folder_path="",
+        model_folder_path="src/data/models/stablediffusion15",
         labels_path=None,
-        dataset=None,
-        dataset_folder_path=""
+        dataset=Dataset.STABLE_DIFFUSION_PROMPTS,
+        dataset_folder_path="src/data/datasets/stable_diffusion_prompts"
     ),
     Model.RNNT: ModelResources(
         model_folder_path="",

@@ -1,8 +1,10 @@
 from pathlib import Path
 from typing import Any
+from datetime import datetime
 
 import numpy as np
 import torch
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline
 from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizer
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
@@ -345,3 +347,119 @@ class TinyLlamaPipeline:
         model_inputs = self.preprocess(sample)
         output_ids = self.predict(model_inputs)
         return self.decode(output_ids, top_k=top_k)
+
+
+class StableDiffusion15Pipeline:
+    def __init__(
+        self,
+        model_folder_path: Path,
+        labels_path: Path | None,
+        device: torch.device
+    ):
+        self.model_folder_path = model_folder_path
+        self.device = device
+        self.pipeline = None
+        self.num_inference_steps = 8 # A mayor cantidad de pasos mejora calidad pero aumenta tiempo de inferencia
+        self.guidance_scale = 7.5 # A mayor guidance scale, más se adhiere la generación al prompt pero puede perder creatividad
+        self.height = 256
+        self.width = 256
+        self.seed = 11
+        self.output_folder_path = self.model_folder_path / "generated_images"
+        self.generation_count = 0 # Contador para evitar colisiones de nombres en las imágenes generadas
+
+    def load(self) -> None:
+        print(f"Cargando modelo desde: {self.model_folder_path}")
+        if not self.model_folder_path.exists():
+            raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
+
+        self.pipeline = StableDiffusionPipeline.from_pretrained(
+            str(self.model_folder_path),
+            torch_dtype=torch.float32,
+            local_files_only=True,
+            safety_checker=None,
+            feature_extractor=None,
+            requires_safety_checker=False,
+        )
+
+        self.pipeline.to(self.device)
+        self.pipeline.enable_attention_slicing()
+        self.pipeline.set_progress_bar_config(disable=True)
+        self.output_folder_path.mkdir(parents=True, exist_ok=True)
+        print("Modelo cargado exitosamente")
+
+    def preprocess(self, sample: TextSample) -> dict[str, object]:
+        print(f"Preprocesando muestra: {sample.path}")
+        if self.pipeline is None:
+            raise RuntimeError("El modelo todavía no está cargado")
+
+        generator = torch.Generator(device=self.device.type).manual_seed(self.seed)
+        return {
+            "sample_path": sample.path,
+            "prompt": sample.prompt,
+            "generator": generator,
+        }
+
+    def predict(self, model_inputs: dict[str, object]) -> dict[str, object]:
+        print("Ejecutando inferencia en el modelo")
+        if self.pipeline is None:
+            raise RuntimeError("El modelo todavía no está cargado")
+
+        prompt: Any = model_inputs["prompt"]
+        generator: Any = model_inputs["generator"]
+
+        result: Any = self.pipeline(
+            prompt=prompt,
+            num_inference_steps=self.num_inference_steps,
+            guidance_scale=self.guidance_scale,
+            height=self.height,
+            width=self.width,
+            generator=generator,
+        )
+
+        image: Any = result.images[0]
+        return {
+            "sample_path": model_inputs["sample_path"],
+            "prompt": prompt,
+            "image": image,
+        }
+
+    def decode(self, logits: dict[str, object], top_k: int = 5) -> list[dict[str, object]]:
+        print("Decodificando resultados de inferencia")
+        if "image" not in logits or "prompt" not in logits or "sample_path" not in logits:
+            raise ValueError("Formato de salida no soportado en Stable Diffusion")
+
+        image: Any = logits["image"]
+        if not hasattr(image, "size") or not hasattr(image, "save"):
+            raise ValueError("La salida de Stable Diffusion no contiene una imagen válida")
+
+        sample_path = logits["sample_path"]
+        sample_name = str(sample_path)
+        safe_sample_name = "".join(
+            character if character.isalnum() or character in ("-", "_") else "_"
+            for character in sample_name
+        )
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.generation_count += 1
+        output_filename = (
+            f"{safe_sample_name}_{timestamp}_{self.generation_count:03d}_"
+            f"{self.width}x{self.height}.png"
+        )
+        output_path = self.output_folder_path / output_filename
+        image.save(output_path)
+
+        width, height = image.size
+        return [
+            {
+                "sample_path": logits["sample_path"],
+                "prompt": logits["prompt"],
+                "width": width,
+                "height": height,
+                "saved_path": str(output_path),
+            }
+        ]
+
+    def infer(self, sample: TextSample, top_k: int = 5) -> list[dict[str, object]]:
+        print(f"Inferiendo muestra: {sample.path}")
+        model_inputs = self.preprocess(sample)
+        output = self.predict(model_inputs)
+        return self.decode(output, top_k=top_k)

@@ -49,4 +49,14 @@ class InferenceRunner:
             single_line_text = " ".join(text.split())
             return single_line_text
 
+        if model_identifier == Model.STABLE_DIFFUSION:
+            prediction = prediction if isinstance(prediction, dict) else {}
+
+            prompt = prediction.get("prompt", "?")
+            width = prediction.get("width", "?")
+            height = prediction.get("height", "?")
+            saved_path = prediction.get("saved_path", "?")
+            single_line_prompt = " ".join(str(prompt).split())
+            return f"{single_line_prompt} -> {width}x{height} | guardada en: {saved_path}"
+
         return "(Formato de predicción desconocido para este modelo)"
