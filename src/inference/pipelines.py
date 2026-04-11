@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, cast
 from datetime import datetime
+import os
 
 import numpy as np
 import torch
@@ -489,6 +490,10 @@ class RNNTPipeline:
         print(f"Cargando modelo desde: {self.model_folder_path}")
         if not self.model_folder_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
+        if self.device.type == "cpu":
+            # Para evitar que NeMo intente usar GPU cuando se ha especificado CPU, deshabilitamos la visibilidad de las GPUs a nivel de entorno
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+            os.environ["NVIDIA_VISIBLE_DEVICES"] = "void"
 
         model_path = self._resolve_model_path()
         loaded_model: Any = ASRModel.restore_from(
@@ -535,6 +540,7 @@ class RNNTPipeline:
         with torch.inference_mode():
             raw_transcription = model.transcribe(
                 audio=[model_inputs["audio_path"]],
+                use_lhotse=False,
                 batch_size=1,
             )
 
