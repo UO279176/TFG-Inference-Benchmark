@@ -19,6 +19,13 @@ class TextSample:
     reference: str | None = None
 
 
+@dataclass(frozen=True)
+class AudioSample:
+    path: Path # Para LibriSpeech, esta variable indica el ID del sample, no su ruta completa
+    audio_path: Path
+    reference: str | None = None
+
+
 class DatasetAdapter(Protocol):
     def iter_samples(self, limit: int | None = None) -> list[Any]:
         """Iterar sobre las muestras del dataset y devolver una lista de muestras."""

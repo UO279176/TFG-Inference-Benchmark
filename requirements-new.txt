@@ -2,3 +2,5 @@ transformers==5.3.0 # Ejecución para todos los modelos
 sentencepiece==0.1.99 # Para el tokenizador de TinyLlama
 diffusers==0.37.1 # Para el pipeline de Stable Diffusion
 accelerate==1.13.0 # Mejora de carga de modelo para Stable Diffusion
+pyarrow==18.1.0 # Lectura de dataset LibriSpeech (.parquet)
+nemo_toolkit[asr]==2.5.2 # Para el pipeline de RNNT (.nemo)

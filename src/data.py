@@ -28,8 +28,8 @@ class Dataset(Enum):
     IMAGENET = "imagenet"
     OPENIMAGES = "openimages"
     CNN_DAILYMAIL_NEWS = "cnn_dailymail_news"
-    LIBRISPEECH = "librispeech"
     STABLE_DIFFUSION_PROMPTS = "stable_diffusion_prompts"
+    LIBRISPEECH = "librispeech"
 
 # Asociación de cada modelo con sus recursos
 MODEL_RESOURCES = {
@@ -58,9 +58,9 @@ MODEL_RESOURCES = {
         dataset_folder_path="src/data/datasets/stable_diffusion_prompts"
     ),
     Model.RNNT: ModelResources(
-        model_folder_path="",
+        model_folder_path="src/data/models/rnnt",
         labels_path=None,
-        dataset=None,
-        dataset_folder_path=""
+        dataset=Dataset.LIBRISPEECH,
+        dataset_folder_path="src/data/datasets/librispeech"
     )
 }

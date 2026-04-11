@@ -55,7 +55,7 @@ if __name__ == "__main__":
             dataset_adapter=dataset_adapter,
             model_identifier=model_identifier
         )
-        runner.run_preview(max_samples=3, top_k=5)
+        runner.run_preview(max_samples=1, top_k=5)
 
         print("Inferencia completada exitosamente")
     except Exception as e:

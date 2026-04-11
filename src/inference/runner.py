@@ -59,4 +59,11 @@ class InferenceRunner:
             single_line_prompt = " ".join(str(prompt).split())
             return f"{single_line_prompt} -> {width}x{height} | guardada en: {saved_path}"
 
+        if model_identifier == Model.RNNT:
+            prediction = prediction if isinstance(prediction, dict) else {}
+
+            text = str(prediction.get("text", "?")).strip()
+            reference = prediction.get("reference", "?").strip()
+            return f"pred: {text} | ref: {reference}"
+
         return "(Formato de predicción desconocido para este modelo)"

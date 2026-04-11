@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from datetime import datetime
 
 import numpy as np
@@ -8,8 +8,9 @@ from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import Stabl
 from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizer
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
+from nemo.collections.asr.models import ASRModel
 
-from inference.contracts import ImageSample, TextSample
+from inference.contracts import AudioSample, ImageSample, TextSample
 
 # Silencia los logs de UNEXPECTED keys
 hf_logging.set_verbosity_error()
@@ -459,6 +460,107 @@ class StableDiffusion15Pipeline:
         ]
 
     def infer(self, sample: TextSample, top_k: int = 5) -> list[dict[str, object]]:
+        print(f"Inferiendo muestra: {sample.path}")
+        model_inputs = self.preprocess(sample)
+        output = self.predict(model_inputs)
+        return self.decode(output, top_k=top_k)
+
+
+class RNNTPipeline:
+    def __init__(
+        self,
+        model_folder_path: Path,
+        labels_path: Path | None,
+        device: torch.device
+    ):
+        self.model_folder_path = model_folder_path
+        self.device = device
+        self.model = None
+
+    def _resolve_model_path(self) -> Path:
+        nemo_files = sorted(self.model_folder_path.glob("*.nemo"))
+        if not nemo_files:
+            raise FileNotFoundError(
+                f"No se encontró ningún archivo .nemo en: {self.model_folder_path}"
+            )
+        return nemo_files[0]
+
+    def load(self) -> None:
+        print(f"Cargando modelo desde: {self.model_folder_path}")
+        if not self.model_folder_path.exists():
+            raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
+
+        model_path = self._resolve_model_path()
+        loaded_model: Any = ASRModel.restore_from(
+            restore_path=str(model_path),
+            map_location=self.device,
+        )
+        self.model = loaded_model
+        model: Any = self.model
+        model.eval()
+        print("Modelo cargado exitosamente")
+
+    def preprocess(self, sample: AudioSample) -> dict[str, object]:
+        print(f"Preprocesando muestra: {sample.path}")
+        if self.model is None:
+            raise RuntimeError("El modelo todavía no está cargado")
+
+        if not sample.audio_path.exists():
+            raise FileNotFoundError(f"No se encontró el audio en la ruta: {sample.audio_path}")
+
+        return {
+            "audio_path": str(sample.audio_path),
+            "reference": sample.reference,
+        }
+
+    def _normalize_transcription(self, raw_output: object) -> str:
+        if isinstance(raw_output, list) and raw_output:
+            first_output = raw_output[0]
+            if isinstance(first_output, str):
+                return first_output.strip()
+            if hasattr(first_output, "text"):
+                return str(first_output.text).strip()
+
+        if isinstance(raw_output, str):
+            return raw_output.strip()
+
+        return str(raw_output).strip()
+
+    def predict(self, model_inputs: dict[str, object]) -> dict[str, object]:
+        print("Ejecutando inferencia en el modelo")
+        model: Any = self.model
+        if model is None:
+            raise RuntimeError("El modelo todavía no está cargado")
+
+        with torch.inference_mode():
+            raw_transcription = model.transcribe(
+                audio=[model_inputs["audio_path"]],
+                batch_size=1,
+            )
+
+        transcription = self._normalize_transcription(raw_transcription)
+        return {
+            "text": transcription,
+            "reference": model_inputs.get("reference"),
+        }
+
+    def decode(self, logits: dict[str, object], top_k: int = 5) -> list[dict[str, object]]:
+        print("Decodificando resultados de inferencia")
+        if "text" not in logits:
+            raise ValueError("Formato de salida no soportado en RNNT")
+
+        text = str(logits["text"]).strip()
+        if not text:
+            text = "[sin transcripción]"
+
+        return [
+            {
+                "text": text,
+                "reference": logits.get("reference"),
+            }
+        ]
+
+    def infer(self, sample: AudioSample, top_k: int = 5) -> list[dict[str, object]]:
         print(f"Inferiendo muestra: {sample.path}")
         model_inputs = self.preprocess(sample)
         output = self.predict(model_inputs)
