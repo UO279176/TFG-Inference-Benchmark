@@ -1,0 +1,1 @@
+Colocar aquí los labels necesarios para la ejecución de los benchmarks. Cada label es un archivo de texto que contiene las etiquetas correspondientes a las clases de salida de los modelos utilizados.

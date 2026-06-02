@@ -206,7 +206,11 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-#! De momento ignoramos los modelos, labels y datasets, que ocupan demasiado como para subirlos a GitHub (no subir hasta reducir tamaño de datasets)
+# Los archivos de datos no se incluyen en el repositorio
 src/data/datasets/*
 src/data/labels/*
 src/data/models/*
+
+!src/data/datasets/datasets.txt
+!src/data/labels/labels.txt
+!src/data/models/models.txt

@@ -1,0 +1,1 @@
+Colocar aquí los modelos para la inferencia. Cada modelo se corresponde con un directorio y los ficheros que contiene dependenderán de cada modelo.
