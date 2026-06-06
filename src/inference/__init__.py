@@ -8,4 +8,5 @@ Contiene:
 - `pipelines.py`: Implementaciones de pipelines de inferencia para modelos específicos.
 - `datasets.py`: Implementaciones de adaptadores para datasets específicos.
 - `runner.py`: Define la clase `InferenceRunner` que ejecuta el proceso de inferencia utilizando un pipeline de modelo y un adaptador de dataset.
+- `metrics.py`: Clase estática global para almacenar y calcular las métricas de inferencia.
 """
