@@ -22,9 +22,9 @@ class InferenceRunner:
         Metrics.start_monitoring(interval_seconds=1.0)
         
         for sample in samples:
-            start_time = time.time()
+            start_time = time.monotonic()
             predictions = self.model_pipeline.infer(sample=sample, top_k=top_k)
-            end_time = time.time()
+            end_time = time.monotonic()
             Metrics.add_inference_time(end_time - start_time)
             self.print_inference(sample, predictions)
             

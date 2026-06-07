@@ -1,17 +1,21 @@
 import threading
+import time
 import psutil
 import csv
 
 
 class Metrics:
-    total_inference_time = 0 # Tiempo de inferencia
-    inference_latencies = [] # Latencia por inferencia
-    cpu_usage = [] # Uso de CPU
+    total_inference_time = 0 # Tiempo de inferencia (s)
+    inference_latencies = [] # Latencia por inferencia (s)
+    cpu_usage = [] # Uso de CPU (%)
     ram_usage = [] # Uso de RAM (MiB)
+    disk_usage = [] # Uso de disco (actividad en %)
     
     monitor_thread = None
     monitor_stop_event = threading.Event()
     monitor_lock = threading.Lock()
+    last_disk_io = None
+    last_disk_sample_time = None
     
     # Inferencias por segundo
     @classmethod
@@ -91,6 +95,28 @@ class Metrics:
     
     
     @classmethod
+    def add_disk_usage(cls, usage: float):
+        cls.disk_usage.append(usage)
+
+    # Promedio de uso de disco
+    @classmethod
+    def average_disk_usage(cls) -> float:
+        if len(cls.disk_usage) == 0:
+            return 0.0
+        else:
+            return sum(cls.disk_usage) / len(cls.disk_usage)
+
+    # Uso máximo de disco
+    @classmethod
+    def max_disk_usage(cls) -> float:
+        if len(cls.disk_usage) == 0:
+            return 0.0
+        else:
+            return max(cls.disk_usage)
+
+
+
+    @classmethod
     def print_metrics(cls):
         print("=== Métricas de inferencia ===")
         print(f"Número de inferencias: {len(cls.inference_latencies)}")
@@ -102,15 +128,33 @@ class Metrics:
         print(f"Uso máximo de CPU: {cls.max_cpu_usage():.2f}%")
         print(f"Promedio de uso de RAM: {cls.average_ram_usage():.2f} MiB")
         print(f"Uso máximo de RAM: {cls.max_ram_usage():.2f} MiB")
+        print(f"Promedio de uso de disco: {cls.average_disk_usage():.2f}%")
+        print(f"Uso máximo de disco: {cls.max_disk_usage():.2f}%")
+        print("=============================")
     
     @classmethod
     def sample_system_metrics(cls):
         cpu_percent = psutil.cpu_percent(interval=0.1)
         ram_used_mib = psutil.virtual_memory().used / (1024 * 1024)
+        current_disk_io = psutil.disk_io_counters(perdisk=False)
+        current_time = time.monotonic()
+        disk_percent = -1.0
+
+        if current_disk_io is not None and cls.last_disk_io is not None and cls.last_disk_sample_time is not None:
+            elapsed_seconds = current_time - cls.last_disk_sample_time
+            if elapsed_seconds > 0:
+                previous_disk_time = cls.last_disk_io.read_time + cls.last_disk_io.write_time
+                current_disk_time = current_disk_io.read_time + current_disk_io.write_time
+                disk_time_delta_ms = float(current_disk_time - previous_disk_time)
+                disk_percent = (disk_time_delta_ms / (elapsed_seconds * 1000.0)) * 100.0
+
+        cls.last_disk_io = current_disk_io
+        cls.last_disk_sample_time = current_time
 
         with cls.monitor_lock:
             cls.add_cpu_usage(float(cpu_percent))
             cls.add_ram_usage(float(ram_used_mib))
+            cls.add_disk_usage(float(disk_percent))
 
     @classmethod
     def _monitor_loop(cls, interval_seconds: float):
@@ -122,6 +166,8 @@ class Metrics:
     @classmethod
     def start_monitoring(cls, interval_seconds: float):
         cls.monitor_stop_event.clear()
+        cls._last_disk_io = None
+        cls._last_disk_sample_time = None
         cls.monitor_thread = threading.Thread(
             target=cls._monitor_loop,
             args=(interval_seconds,),
@@ -140,13 +186,13 @@ class Metrics:
     @classmethod
     def export_metrics_csv(cls, file_path: str):
         '''
-        Exporta las métricas a un archivo CSV de tres columnas: inference_time, cpu_usage y ram_usage. Cada fila corresponde
-        a una inferencia (en el caso de inference_time) o a una muestra del monitor (en el caso de cpu_usage y ram_usage).
-        No existe relación entre las filas de inference_time y las filas de cpu_usage/ram_usage, ya que se muestrean de forma independiente.
+        Exporta las métricas a un archivo CSV de cuatro columnas: inference_time, cpu_usage, ram_usage y disk_usage. Cada fila corresponde
+        a una inferencia (en el caso de inference_time) o a una muestra del monitor (en el caso de cpu_usage, ram_usage y disk_usage).
+        No existe relación entre las filas de inference_time y las filas de cpu_usage/ram_usage/disk_usage, ya que se muestrean de forma independiente.
         '''
         
         with open(file_path, mode='w', newline='') as csv_file:
-            fieldnames = ['inference_time', 'cpu_usage', 'ram_usage']
+            fieldnames = ['inference_time', 'cpu_usage', 'ram_usage', 'disk_usage']
             writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
             writer.writeheader()
             
@@ -154,13 +200,15 @@ class Metrics:
                 len(cls.inference_latencies),
                 len(cls.cpu_usage),
                 len(cls.ram_usage),
+                len(cls.disk_usage)
             )
 
             for i in range(max_rows):
                 writer.writerow({
                     'inference_time': cls.inference_latencies[i] if i < len(cls.inference_latencies) else '',
                     'cpu_usage': cls.cpu_usage[i] if i < len(cls.cpu_usage) else '',
-                    'ram_usage': cls.ram_usage[i] if i < len(cls.ram_usage) else ''
+                    'ram_usage': cls.ram_usage[i] if i < len(cls.ram_usage) else '',
+                    'disk_usage': cls.disk_usage[i] if i < len(cls.disk_usage) else ''
                 })
                 
         print(f"Métricas exportadas a {file_path}")
