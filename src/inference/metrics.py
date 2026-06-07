@@ -1,10 +1,17 @@
+import threading
+import psutil
+import csv
+
+
 class Metrics:
     total_inference_time = 0 # Tiempo de inferencia
     inference_latencies = [] # Latencia por inferencia
     cpu_usage = [] # Uso de CPU
-    ram_usage = [] # Uso de RAM
-    accelerator_usage = [] # Uso del acelerador (GPU/NPU/TPU)
-    consumption_usage = [] # Consumo energético
+    ram_usage = [] # Uso de RAM (MiB)
+    
+    monitor_thread = None
+    monitor_stop_event = threading.Event()
+    monitor_lock = threading.Lock()
     
     # Inferencias por segundo
     @classmethod
@@ -80,50 +87,8 @@ class Metrics:
             return 0.0
         else:
             return max(cls.ram_usage)
-
-
-
-    @classmethod
-    def add_accelerator_usage(cls, usage: float):
-        cls.accelerator_usage.append(usage)
     
-    # Promedio de uso del acelerador
-    @classmethod
-    def average_accelerator_usage(cls) -> float:
-        if len(cls.accelerator_usage) == 0:
-            return 0.0
-        else:
-            return sum(cls.accelerator_usage) / len(cls.accelerator_usage)
     
-    # Uso máximo del acelerador
-    @classmethod
-    def max_accelerator_usage(cls) -> float:
-        if len(cls.accelerator_usage) == 0:
-            return 0.0
-        else:
-            return max(cls.accelerator_usage)
-
-
-
-    @classmethod
-    def add_consumption_usage(cls, usage: float):
-        cls.consumption_usage.append(usage)
-
-    # Promedio de consumo energético
-    @classmethod
-    def average_consumption_usage(cls) -> float:
-        if len(cls.consumption_usage) == 0:
-            return 0.0
-        else:
-            return sum(cls.consumption_usage) / len(cls.consumption_usage)
-    
-    # Consumo energético máximo
-    @classmethod
-    def max_consumption_usage(cls) -> float:
-        if len(cls.consumption_usage) == 0:
-            return 0.0
-        else:
-            return max(cls.consumption_usage)
     
     @classmethod
     def print_metrics(cls):
@@ -135,9 +100,67 @@ class Metrics:
         print(f"Inferencias por segundo: {cls.inferences_per_second():.4f} inf/s")
         print(f"Promedio de uso de CPU: {cls.average_cpu_usage():.2f}%")
         print(f"Uso máximo de CPU: {cls.max_cpu_usage():.2f}%")
-        print(f"Promedio de uso de RAM: {cls.average_ram_usage():.2f}%")
-        print(f"Uso máximo de RAM: {cls.max_ram_usage():.2f}%")
-        print(f"Promedio de uso del acelerador: {cls.average_accelerator_usage():.2f}%")
-        print(f"Uso máximo del acelerador: {cls.max_accelerator_usage():.2f}%")
-        print(f"Promedio de consumo energético: {cls.average_consumption_usage():.2f} W")
-        print(f"Consumo energético máximo: {cls.max_consumption_usage():.2f} W")
+        print(f"Promedio de uso de RAM: {cls.average_ram_usage():.2f} MiB")
+        print(f"Uso máximo de RAM: {cls.max_ram_usage():.2f} MiB")
+    
+    @classmethod
+    def sample_system_metrics(cls):
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        ram_used_mib = psutil.virtual_memory().used / (1024 * 1024)
+
+        with cls.monitor_lock:
+            cls.add_cpu_usage(float(cpu_percent))
+            cls.add_ram_usage(float(ram_used_mib))
+
+    @classmethod
+    def _monitor_loop(cls, interval_seconds: float):
+        while not cls.monitor_stop_event.is_set():
+            cls.sample_system_metrics()
+            if cls.monitor_stop_event.wait(timeout=interval_seconds):
+                break
+
+    @classmethod
+    def start_monitoring(cls, interval_seconds: float):
+        cls.monitor_stop_event.clear()
+        cls.monitor_thread = threading.Thread(
+            target=cls._monitor_loop,
+            args=(interval_seconds,),
+            daemon=True,
+            name="metrics-monitor"
+        )
+        cls.monitor_thread.start()
+
+    @classmethod
+    def stop_monitoring(cls):
+        cls.monitor_stop_event.set()
+        if cls.monitor_thread is not None and cls.monitor_thread.is_alive():
+            cls.monitor_thread.join(timeout=2)
+        cls.monitor_thread = None
+        
+    @classmethod
+    def export_metrics_csv(cls, file_path: str):
+        '''
+        Exporta las métricas a un archivo CSV de tres columnas: inference_time, cpu_usage y ram_usage. Cada fila corresponde
+        a una inferencia (en el caso de inference_time) o a una muestra del monitor (en el caso de cpu_usage y ram_usage).
+        No existe relación entre las filas de inference_time y las filas de cpu_usage/ram_usage, ya que se muestrean de forma independiente.
+        '''
+        
+        with open(file_path, mode='w', newline='') as csv_file:
+            fieldnames = ['inference_time', 'cpu_usage', 'ram_usage']
+            writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            max_rows = max(
+                len(cls.inference_latencies),
+                len(cls.cpu_usage),
+                len(cls.ram_usage),
+            )
+
+            for i in range(max_rows):
+                writer.writerow({
+                    'inference_time': cls.inference_latencies[i] if i < len(cls.inference_latencies) else '',
+                    'cpu_usage': cls.cpu_usage[i] if i < len(cls.cpu_usage) else '',
+                    'ram_usage': cls.ram_usage[i] if i < len(cls.ram_usage) else ''
+                })
+                
+        print(f"Métricas exportadas a {file_path}")

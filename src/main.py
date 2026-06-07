@@ -53,7 +53,8 @@ if __name__ == "__main__":
         runner = InferenceRunner(
             model_pipeline=model_pipeline,
             dataset_adapter=dataset_adapter,
-            model_identifier=model_identifier
+            model_identifier=model_identifier,
+            accelerator_identifier=accelerator_identifier
         )
         runner.run_preview(max_samples=5, top_k=5)
 

@@ -4,3 +4,4 @@ diffusers==0.37.1 # Para el pipeline de Stable Diffusion
 accelerate==1.13.0 # Mejora de carga de modelo para Stable Diffusion
 pyarrow==18.1.0 # Lectura de dataset LibriSpeech (.parquet)
 nemo_toolkit[asr]==2.5.2 # Para el pipeline de RNNT (.nemo)
+psutil==7.2.2 # Para la recopilación de métricas

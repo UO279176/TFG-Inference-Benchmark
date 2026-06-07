@@ -1,15 +1,16 @@
 from inference.contracts import DatasetAdapter, ModelPipeline
-from data import Model
+from data import Model, Accelerator
 import time
 
 from inference.metrics import Metrics
 
 class InferenceRunner:
-    def __init__(self, model_pipeline: ModelPipeline, dataset_adapter: DatasetAdapter, model_identifier: Model):
+    def __init__(self, model_pipeline: ModelPipeline, dataset_adapter: DatasetAdapter, model_identifier: Model, accelerator_identifier: Accelerator):
         self.model_pipeline = model_pipeline
         self.dataset_adapter = dataset_adapter
         self.model_identifier = model_identifier
-
+        self.accelerator_identifier = accelerator_identifier
+        
     def run_preview(self, max_samples: int, top_k: int):
         self.model_pipeline.load()
         samples = self.dataset_adapter.iter_samples(limit=max_samples)
@@ -18,13 +19,18 @@ class InferenceRunner:
             print("No se encontraron muestras en el dataset")
             return
 
+        Metrics.start_monitoring(interval_seconds=1.0)
+        
         for sample in samples:
             start_time = time.time()
             predictions = self.model_pipeline.infer(sample=sample, top_k=top_k)
             end_time = time.time()
             Metrics.add_inference_time(end_time - start_time)
             self.print_inference(sample, predictions)
+            
+        Metrics.stop_monitoring()
         Metrics.print_metrics()
+        Metrics.export_metrics_csv(f"results/metrics_{self.model_identifier.value}_{self.accelerator_identifier.value}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv")
     
     def print_inference(self, sample, predictions):
         print("-" * 50)
@@ -33,7 +39,7 @@ class InferenceRunner:
             print(f"{rank}. {self._format_prediction(prediction, self.model_identifier)}")
         print("-" * 50)
 
-    def _format_prediction(self, prediction: object, model_identifier: Model) -> str:    
+    def _format_prediction(self, prediction: object, model_identifier: Model) -> str:
         if model_identifier == Model.RESNET50:
             prediction = prediction if isinstance(prediction, tuple) else (-1, -1.0, "?")
             
