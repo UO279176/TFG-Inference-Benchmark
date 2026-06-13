@@ -16,7 +16,8 @@ Para preparar el entorno de ejecución se utilizará Docker y se deben seguir lo
 6. Construir la imagen de Docker:
 ```docker build -t tfg-inference-benchmark .```
 7. Ejecutar el contenedor de Docker:
-```docker run -it --rm --gpus all -v <ruta-absoluta-a-src-data>:/app/src/data tfg-inference-benchmark <acelerador> <modelo>```
+```docker run -it --rm --gpus all -v ./src/data:/app/src/data -v ./results:/app/results tfg-inference-benchmark <acelerador> <modelo>```
 Ejecutar el contenedor sin parámetros mostrará la ayuda con las opciones disponibles.
 
 La carpeta `src/data` no se copia dentro de la imagen para reducir su tamaño. Debe existir en el host y montarse al arrancar el contenedor.
+La carpeta `results` también debe montarse si quieres conservar los CSV generados fuera del contenedor.

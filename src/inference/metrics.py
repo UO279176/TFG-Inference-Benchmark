@@ -1,5 +1,6 @@
 import threading
 import time
+from pathlib import Path
 import psutil
 import csv
 
@@ -101,10 +102,11 @@ class Metrics:
     # Promedio de uso de disco
     @classmethod
     def average_disk_usage(cls) -> float:
-        if len(cls.disk_usage) == 0:
+        # La primera muestra siempre es -1.0, por lo que no se considera en el promedio
+        if len(cls.disk_usage) <= 1:
             return 0.0
         else:
-            return sum(cls.disk_usage) / len(cls.disk_usage)
+            return sum(cls.disk_usage[1:]) / (len(cls.disk_usage) - 1)
 
     # Uso máximo de disco
     @classmethod
@@ -190,7 +192,8 @@ class Metrics:
         a una inferencia (en el caso de inference_time) o a una muestra del monitor (en el caso de cpu_usage, ram_usage y disk_usage).
         No existe relación entre las filas de inference_time y las filas de cpu_usage/ram_usage/disk_usage, ya que se muestrean de forma independiente.
         '''
-        
+
+        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, mode='w', newline='') as csv_file:
             fieldnames = ['inference_time', 'cpu_usage', 'ram_usage', 'disk_usage']
             writer = csv.DictWriter(csv_file, fieldnames=fieldnames)

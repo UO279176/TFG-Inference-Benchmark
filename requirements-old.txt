@@ -1,4 +1,5 @@
-transformers==4.18.0 # Ejecución para todos los modelos
+transformers==4.18.0 # Para ejecución de modelos
+tensorflow==2.20.0 # Para ejecución de modelos
 sentencepiece==0.1.99 # Para el tokenizador de TinyLlama
 diffusers==0.37.1 # Para el pipeline de Stable Diffusion
 accelerate==1.13.0 # Mejora de carga de modelo para Stable Diffusion
