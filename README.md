@@ -12,9 +12,11 @@ Para preparar el entorno de ejecución se utilizará Docker y se deben seguir lo
 ```cd TFG-Inference-Benchmark```
 4. Crear un archivo .env con una variable de entorno que indique la antigüedad de la arquitectura CUDA a utilizar ("old" para CUDA 10.2 y "new" para CUDA 12.6 o superior):
 ```CUDA_TARGET=<new|old>```
-5. Descargar los modelos, datasets y labels necesarios para la ejecución de los benchmarks y guardarlos en la carpeta "data" del proyecto.
+5. Descargar los modelos, datasets y labels necesarios para la ejecución de los benchmarks y guardarlos en la carpeta "src/data" del proyecto.
 6. Construir la imagen de Docker:
 ```docker build -t tfg-inference-benchmark .```
 7. Ejecutar el contenedor de Docker:
-```docker run -it --rm --gpus all tfg-inference-benchmark <acelerador> <modelo>```
+```docker run -it --rm --gpus all -v <ruta-absoluta-a-src-data>:/app/src/data tfg-inference-benchmark <acelerador> <modelo>```
 Ejecutar el contenedor sin parámetros mostrará la ayuda con las opciones disponibles.
+
+La carpeta `src/data` no se copia dentro de la imagen para reducir su tamaño. Debe existir en el host y montarse al arrancar el contenedor.

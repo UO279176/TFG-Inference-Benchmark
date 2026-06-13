@@ -6,6 +6,8 @@ FROM ubuntu:18.04 AS base-old
 RUN apt-get update && apt-get install -y \
     python3.6 \
     python3-pip \
+    python3-numpy \
+    sox \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir torch==1.10.0 -f https://nvidia.box.com
@@ -18,6 +20,8 @@ FROM ubuntu:22.04 AS base-new
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-pip \
+    python3-numpy \
+    sox \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu126
@@ -32,5 +36,7 @@ WORKDIR /app
 
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-COPY src/ ./src/
+COPY src/main.py ./src/
+COPY src/data.py ./src/
+COPY src/inference/ ./src/inference/
 ENTRYPOINT ["python3", "src/main.py"]
