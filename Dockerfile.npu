@@ -1,0 +1,25 @@
+# Esta imagen es para sistemas con la NPU Rockchip RK3588, concretamente para la Orange Pi 5 Pro
+FROM ubuntu:22.04 AS base-npu
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    python3-numpy \
+    sox \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir rknn-toolkit-lite2
+
+WORKDIR /app
+COPY requirements-new.txt ./requirements.txt
+
+# Usamos la imagen base correspondiente
+FROM base-npu AS final
+
+WORKDIR /app
+
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+COPY src/main.py ./src/
+COPY src/data.py ./src/
+COPY src/inference/ ./src/inference/
+ENTRYPOINT ["python3", "src/main.py"]

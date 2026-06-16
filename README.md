@@ -10,14 +10,17 @@ Para preparar el entorno de ejecución se utilizará Docker y se deben seguir lo
 ```git clone https://github.com/UO279176/TFG-Inference-Benchmark.git```
 3. Acceder al directorio del proyecto:
 ```cd TFG-Inference-Benchmark```
-4. Crear un archivo .env con una variable de entorno que indique la antigüedad de la arquitectura CUDA a utilizar ("old" para CUDA 10.2 y "new" para CUDA 12.6 o superior):
-```CUDA_TARGET=<new|old>```
-5. Descargar los modelos, datasets y labels necesarios para la ejecución de los benchmarks y guardarlos en la carpeta "src/data" del proyecto.
-6. Construir la imagen de Docker:
-```docker build -t tfg-inference-benchmark .```
-7. Ejecutar el contenedor de Docker:
+4. Descargar los modelos, datasets y labels necesarios para la ejecución de los benchmarks y guardarlos en la carpeta "src/data" del proyecto.
+5. Construir la imagen de Docker:
+```docker build -f <dockerfile a usar> -t tfg-inference-benchmark .```
+6. Ejecutar el contenedor de Docker:
+- Si se va a usar GPU:
 ```docker run -it --rm --gpus all -v ./src/data:/app/src/data -v ./results:/app/results tfg-inference-benchmark <acelerador> <modelo>```
+- Si se va a usar NPU:
+```docker run -it --rm --device=/dev/dri/renderD129:/dev/dri/renderD129 -v ./src/data:/app/src/data -v ./results:/app/results tfg-inference-benchmark <acelerador> <modelo>```
 Ejecutar el contenedor sin parámetros mostrará la ayuda con las opciones disponibles.
 
+### Notas adicionales
 La carpeta `src/data` no se copia dentro de la imagen para reducir su tamaño. Debe existir en el host y montarse al arrancar el contenedor.
-La carpeta `results` también debe montarse si quieres conservar los CSV generados fuera del contenedor.
+La carpeta `results` también debe montarse si se quiere conservar los CSV generados fuera del contenedor.
+Los modelos específicos para un acelerador en concreto se encuentran en la carpeta `src/data/models/<acelerador>` y siguen la misma estructura de carpetas que los modelos generales.

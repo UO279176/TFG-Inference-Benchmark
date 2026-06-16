@@ -1,0 +1,29 @@
+# Esta imagen es específica para la Jetson Nano, que tiene CUDA 10.2 y solo puede utilizar hasta el Python 3.6
+FROM ubuntu:18.04 AS base-old
+RUN apt-get update && apt-get install -y \
+    python3.6 \
+    python3-pip \
+    python3-numpy \
+    sox \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+RUN wget https://nvidia.box.com/shared/static/fjtbno0vpo676a25cgvuqc1wty0fkkg6.whl -O torch-1.10.0-cp36-cp36m-linux_aarch64.whl && \
+    pip3 install --no-cache-dir torch-1.10.0-cp36-cp36m-linux_aarch64.whl && \
+    rm torch-1.10.0-cp36-cp36m-linux_aarch64.whl
+
+WORKDIR /app
+COPY requirements-old.txt ./requirements.txt
+
+# Usamos la imagen base correspondiente
+FROM base-old AS final
+
+WORKDIR /app
+
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+COPY src/main.py ./src/
+COPY src/data.py ./src/
+COPY src/inference/ ./src/inference/
+ENTRYPOINT ["python3", "src/main.py"]
