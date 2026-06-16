@@ -17,7 +17,7 @@ Para preparar el entorno de ejecución se utilizará Docker y se deben seguir lo
 - Si se va a usar GPU:
 ```docker run -it --rm --gpus all -v ./src/data:/app/src/data -v ./results:/app/results tfg-inference-benchmark <acelerador> <modelo>```
 - Si se va a usar NPU:
-```docker run -it --rm --device=/dev/dri/renderD129:/dev/dri/renderD129 -v ./src/data:/app/src/data -v ./results:/app/results tfg-inference-benchmark <acelerador> <modelo>```
+```docker run -it --rm --privileged --device=/dev/dri/renderD129:/dev/dri/renderD129 -v ./src/data:/app/src/data -v ./results:/app/results -v /usr/lib/librknnrt.so:/usr/lib/librknnrt.so -v /dev/dri/renderD129:/dev/dri/renderD129 -v /proc/device-tree/compatible:/proc/device-tree/compatible tfg-inference-benchmark <acelerador> <modelo>```
 Ejecutar el contenedor sin parámetros mostrará la ayuda con las opciones disponibles.
 
 ### Notas adicionales
