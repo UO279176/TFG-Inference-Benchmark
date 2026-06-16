@@ -29,6 +29,8 @@ class InferenceRunner:
             self.print_inference(sample, predictions)
             
         Metrics.stop_monitoring()
+        self.model_pipeline.unload()
+        
         Metrics.print_metrics()
         Metrics.export_metrics_csv(f"results/metrics_{self.model_identifier.value}_{self.accelerator_identifier.value}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv")
     

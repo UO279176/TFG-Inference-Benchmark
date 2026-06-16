@@ -1,9 +1,7 @@
 from pathlib import Path
 from typing import Callable
 
-import torch
-
-from data import Dataset, Model, ModelResources
+from data import Dataset, ExecutionTarget, Model, ModelResources
 from inference.contracts import DatasetAdapter, ModelPipeline
 from inference.datasets import CnnDailyMailDataset, ImageNetFolderDataset, LibriSpeechParquetDataset, OpenImagesFolderDataset, StableDiffusionPromptsDataset
 from inference.pipelines import ResNet50Pipeline, RetinaNetPipeline, TinyLlamaPipeline, StableDiffusion15Pipeline, RNNTPipeline
@@ -28,7 +26,7 @@ DATASET_ADAPTER_REGISTRY: dict[Dataset, Callable[..., DatasetAdapter]] = {
 def build_model_pipeline(
     model_identifier: Model,
     resources: ModelResources,
-    device: torch.device,
+    target: ExecutionTarget,
     project_root: Path,
 ) -> ModelPipeline:
     pipeline_class = MODEL_PIPELINE_REGISTRY.get(model_identifier)
@@ -41,7 +39,7 @@ def build_model_pipeline(
     return pipeline_class(
         model_folder_path=model_folder_path,
         labels_path=labels_path,
-        device=device
+        target=target
     )
 
 

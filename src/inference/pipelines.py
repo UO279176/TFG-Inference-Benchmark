@@ -10,23 +10,25 @@ from transformers import AutoModelForImageClassification, AutoModelForCausalLM, 
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
 from nemo.collections.asr.models import ASRModel
+from rknnlite.api import RKNNLite
 
 from inference.contracts import AudioSample, ImageSample, TextSample
+from data import ExecutionTarget, Accelerator
 
 # Silencia los logs de UNEXPECTED keys
 hf_logging.set_verbosity_error()
 
-
+# MARK: Resnet50
 class ResNet50Pipeline:
     def __init__(
         self,
         model_folder_path: Path,
         labels_path: Path | None,
-        device: torch.device
+        target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
         self.labels_path = labels_path
-        self.device = device
+        self.target = target
         self.model = None
         self.labels = self._load_labels()
         self.image_size = 224
@@ -46,12 +48,24 @@ class ResNet50Pipeline:
         print(f"Cargando modelo desde: {self.model_folder_path}")
         if not self.model_folder_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
-        if self.device.type == "cuda" and not torch.cuda.is_available():
+        if self.target.accelerator == Accelerator.GPU and not torch.cuda.is_available():
             raise RuntimeError("Se pidió GPU para un modelo PyTorch pero CUDA no está disponible en torch")
 
-        self.model = AutoModelForImageClassification.from_pretrained(str(self.model_folder_path))
-        self.model.to(self.device)
-        self.model.eval()
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            self.model = AutoModelForImageClassification.from_pretrained(str(self.model_folder_path))
+            self.model.to(self.target.device)
+            self.model.eval()
+        elif self.target.accelerator == Accelerator.NPU:
+            self.model = RKNNLite()
+            ret = self.model.load_rknn(self.model_folder_path / "resnet50.rknn")
+            if ret != 0:
+                raise RuntimeError(f"Error al cargar el modelo RKNN: código de error {ret}")
+            
+            ret = self.model.init_runtime()
+            if ret != 0:
+                raise RuntimeError(f"Error al inicializar el runtime RKNN: código de error {ret}")
+        else:
+            raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
 
     def _image_to_tensor(self, sample: ImageSample) -> torch.Tensor:
         resized = sample.image.resize((self.image_size, self.image_size))
@@ -59,22 +73,51 @@ class ResNet50Pipeline:
         tensor = image_bytes.view(self.image_size, self.image_size, 3).permute(2, 0, 1).float() / 255.0
         normalized = (tensor - self.mean) / self.std
         return normalized
+    
+    def _image_to_numpy(self, sample: ImageSample) -> np.ndarray:
+        resized = sample.image.resize((self.image_size, self.image_size))
+        image_array = np.asarray(resized, dtype=np.float32)
+        normalized = (image_array / 255.0 - self.mean.numpy().transpose(1, 2, 0)) / self.std.numpy().transpose(1, 2, 0)
+        return np.ascontiguousarray(normalized[None, ...])
 
-    def preprocess(self, sample: ImageSample) -> dict[str, torch.Tensor]:
+    def preprocess(self, sample: ImageSample) -> dict[str, Any]:
         print(f"Preprocesando muestra: {sample.path}")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
 
-        pixel_values = self._image_to_tensor(sample).unsqueeze(0).to(self.device)
+        pixel_values = None
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            pixel_values = self._image_to_tensor(sample).unsqueeze(0).to(self.target.device)
+        elif self.target.accelerator == Accelerator.NPU:
+            pixel_values = self._image_to_numpy(sample)
+        else:
+            raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
+
         return {"pixel_values": pixel_values}
 
-    def predict(self, model_inputs: dict[str, torch.Tensor]) -> torch.Tensor:
+    def predict(self, model_inputs: dict[str, Any]) -> torch.Tensor:
         print("Ejecutando inferencia en el modelo")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
 
-        with torch.inference_mode():
-            return self.model(**model_inputs).logits
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            with torch.inference_mode():
+                return self.model(**model_inputs).logits
+        elif self.target.accelerator == Accelerator.NPU:
+            rknn_outputs = self.model.inference(inputs=[model_inputs["pixel_values"]])
+            if not rknn_outputs:
+                raise RuntimeError("RKNN no devolvió salidas")
+
+            raw_output = rknn_outputs[0]
+            if isinstance(raw_output, torch.Tensor):
+                return raw_output
+
+            if isinstance(raw_output, np.ndarray):
+                return torch.from_numpy(raw_output)
+
+            return torch.as_tensor(raw_output)
+        else:
+            raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
 
     def decode(self, logits: torch.Tensor, top_k: int = 5) -> list[tuple[int, float, str]]:
         print("Decodificando resultados de inferencia")
@@ -94,17 +137,27 @@ class ResNet50Pipeline:
         logits = self.predict(model_inputs)
         return self.decode(logits, top_k=top_k)
 
+    def unload(self) -> None:
+        print("Descargando modelo de memoria")
+        if self.model is None:
+            print("El modelo ya estaba descargado")
+            return
+        
+        if self.target.accelerator == Accelerator.NPU:
+            self.model.release()
+            
 
+# MARK: RetinaNet
 class RetinaNetPipeline:
     def __init__(
         self,
         model_folder_path: Path,
         labels_path: Path | None,
-        device: torch.device
+        target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
         self.labels_path = labels_path
-        self.device = device
+        self.target = target
         self.tf_device = "/CPU:0"
         self.model = None
         self.image_size = 800
@@ -112,7 +165,7 @@ class RetinaNetPipeline:
         self.labels = self._load_labels()
 
     def _resolve_tf_device(self) -> str:
-        if self.device.type == "cuda":
+        if self.target.accelerator == Accelerator.GPU:
             gpus = tf.config.list_physical_devices("GPU")
             if not gpus:
                 raise RuntimeError("Se pidió GPU pero TensorFlow no detecta ninguna GPU")
@@ -231,16 +284,26 @@ class RetinaNetPipeline:
         detections = self.predict(model_inputs)
         return self.decode(detections, top_k=top_k)
 
+    def unload(self) -> None:
+        print("Descargando modelo de memoria")
+        if self.model is None:
+            print("El modelo ya estaba descargado")
+            return
+        
+        if self.target.accelerator == Accelerator.NPU:
+            self.model.release()
+            
 
+# MARK: TinyLlama
 class TinyLlamaPipeline:
     def __init__(
         self,
         model_folder_path: Path,
         labels_path: Path | None,
-        device: torch.device
+        target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
-        self.device = device
+        self.target = target
         self.model: Any = None
         self.tokenizer: Any = None
         self.max_input_chars = 1200
@@ -268,7 +331,7 @@ class TinyLlamaPipeline:
             torch_dtype=torch.float32,
             local_files_only=True,
         )
-        self.model.to(self.device)
+        self.model.to(self.target.device)
         self.model.eval()
         print("Modelo cargado exitosamente")
 
@@ -280,12 +343,12 @@ class TinyLlamaPipeline:
 
         prompt_text = sample.prompt[:self.max_input_chars]
         prompt = f"Summarize the following news article:\n\n{prompt_text}"
-        tokenized_inputs = tokenizer(prompt, return_tensors="pt", truncation=True).to(self.device)
+        tokenized_inputs = tokenizer(prompt, return_tensors="pt", truncation=True).to(self.target.device)
         input_length = tokenized_inputs["input_ids"].shape[1]
         return {
             "input_ids": tokenized_inputs["input_ids"],
             "attention_mask": tokenized_inputs["attention_mask"],
-            "input_length": torch.tensor([input_length], device=self.device)
+            "input_length": torch.tensor([input_length], device=self.target.device)
         }
 
     def predict(self, model_inputs: dict[str, Any]) -> dict[str, torch.Tensor]:
@@ -350,16 +413,26 @@ class TinyLlamaPipeline:
         output_ids = self.predict(model_inputs)
         return self.decode(output_ids, top_k=top_k)
 
+    def unload(self) -> None:
+        print("Descargando modelo de memoria")
+        if self.model is None:
+            print("El modelo ya estaba descargado")
+            return
+        
+        if self.target.accelerator == Accelerator.NPU:
+            self.model.release()
+            
 
+# MARK: Stable Diffusion 1.5
 class StableDiffusion15Pipeline:
     def __init__(
         self,
         model_folder_path: Path,
         labels_path: Path | None,
-        device: torch.device
+        target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
-        self.device = device
+        self.target = target
         self.pipeline = None
         self.num_inference_steps = 8 # A mayor cantidad de pasos mejora calidad pero aumenta tiempo de inferencia
         self.guidance_scale = 7.5 # A mayor guidance scale, más se adhiere la generación al prompt pero puede perder creatividad
@@ -383,7 +456,7 @@ class StableDiffusion15Pipeline:
             requires_safety_checker=False,
         )
 
-        self.pipeline.to(self.device)
+        self.pipeline.to(self.target.device)
         self.pipeline.enable_attention_slicing()
         self.pipeline.set_progress_bar_config(disable=True)
         self.output_folder_path.mkdir(parents=True, exist_ok=True)
@@ -394,7 +467,9 @@ class StableDiffusion15Pipeline:
         if self.pipeline is None:
             raise RuntimeError("El modelo todavía no está cargado")
 
-        generator = torch.Generator(device=self.device.type).manual_seed(self.seed)
+        assert self.target.device is not None
+        generator = torch.Generator(device=self.target.device.type).manual_seed(self.seed)
+        
         return {
             "sample_path": sample.path,
             "prompt": sample.prompt,
@@ -466,16 +541,26 @@ class StableDiffusion15Pipeline:
         output = self.predict(model_inputs)
         return self.decode(output, top_k=top_k)
 
+    def unload(self) -> None:
+        print("Descargando modelo de memoria")
+        if self.pipeline is None:
+            print("El modelo ya estaba descargado")
+            return
+        
+        if self.target.accelerator == Accelerator.NPU:
+            self.pipeline.release()
+            
 
+# MARK: RNNT
 class RNNTPipeline:
     def __init__(
         self,
         model_folder_path: Path,
         labels_path: Path | None,
-        device: torch.device
+        target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
-        self.device = device
+        self.target = target
         self.model = None
 
     def _resolve_model_path(self) -> Path:
@@ -490,7 +575,7 @@ class RNNTPipeline:
         print(f"Cargando modelo desde: {self.model_folder_path}")
         if not self.model_folder_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
-        if self.device.type == "cpu":
+        if self.target.accelerator == Accelerator.CPU:
             # Para evitar que NeMo intente usar GPU cuando se ha especificado CPU, deshabilitamos la visibilidad de las GPUs a nivel de entorno
             os.environ["CUDA_VISIBLE_DEVICES"] = ""
             os.environ["NVIDIA_VISIBLE_DEVICES"] = "void"
@@ -498,7 +583,7 @@ class RNNTPipeline:
         model_path = self._resolve_model_path()
         loaded_model: Any = ASRModel.restore_from(
             restore_path=str(model_path),
-            map_location=self.device,
+            map_location=self.target.device,
         )
         self.model = loaded_model
         model: Any = self.model
@@ -571,3 +656,12 @@ class RNNTPipeline:
         model_inputs = self.preprocess(sample)
         output = self.predict(model_inputs)
         return self.decode(output, top_k=top_k)
+
+    def unload(self) -> None:
+        print("Descargando modelo de memoria")
+        if self.model is None:
+            print("El modelo ya estaba descargado")
+            return
+        
+        if self.target.accelerator == Accelerator.NPU:
+            self.model.release()

@@ -52,3 +52,7 @@ class ModelPipeline(Protocol):
     def infer(self, sample: Any, top_k: int = 5) -> Sequence[Any]:
         """Ejecutar el pipeline completo de inferencia: preprocess -> predict -> decode."""
         ...
+
+    def unload(self) -> None:
+        """Liberar los recursos del modelo (específicamente para la NPU)."""
+        ...

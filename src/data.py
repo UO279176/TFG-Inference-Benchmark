@@ -3,12 +3,19 @@ from __future__ import annotations
 from enum import Enum
 from dataclasses import dataclass
 
+import torch
+
 @dataclass(frozen=True)
 class ModelResources:
     model_folder_path: str # Ruta relativa del modelo
     labels_path: str | None # Ruta relativa del archivo de etiquetas (si aplica)
     dataset: Dataset | None # Tipo de dataset asociado al modelo
     dataset_folder_path: str # Ruta relativa del dataset asociado al modelo
+
+@dataclass(frozen=True)
+class ExecutionTarget:
+    accelerator: Accelerator
+    device: torch.device | None
 
 class Accelerator(Enum):
     CPU = "cpu"
