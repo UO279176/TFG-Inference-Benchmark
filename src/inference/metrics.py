@@ -138,20 +138,40 @@ class Metrics:
     def sample_system_metrics(cls):
         cpu_percent = psutil.cpu_percent(interval=0.1)
         ram_used_mib = psutil.virtual_memory().used / (1024 * 1024)
-        current_disk_io = psutil.disk_io_counters(perdisk=False)
+        
+        # Cálculo del porcentaje de uso del disco basado en el tiempo ocupado del disco
+        current_disk_io = psutil.disk_io_counters(perdisk=True)
         current_time = time.monotonic()
         disk_percent = -1.0
 
         if current_disk_io is not None and cls.last_disk_io is not None and cls.last_disk_sample_time is not None:
             elapsed_seconds = current_time - cls.last_disk_sample_time
             if elapsed_seconds > 0:
-                previous_disk_time = cls.last_disk_io.read_time + cls.last_disk_io.write_time
-                current_disk_time = current_disk_io.read_time + current_disk_io.write_time
-                disk_time_delta_ms = float(current_disk_time - previous_disk_time)
-                disk_percent = (disk_time_delta_ms / (elapsed_seconds * 1000.0)) * 100.0
+                disk_percentages = []
+
+                for disk_name, current_disk_stats in current_disk_io.items():
+                    previous_disk_stats = cls.last_disk_io.get(disk_name)
+                    if previous_disk_stats is None:
+                        continue
+
+                    # Calcular el tiempo ocupado del disco en milisegundos
+                    if hasattr(current_disk_stats, "busy_time") and hasattr(previous_disk_stats, "busy_time"):
+                        current_disk_time = current_disk_stats.busy_time
+                        previous_disk_time = previous_disk_stats.busy_time
+                    else:
+                        current_disk_time = current_disk_stats.read_time + current_disk_stats.write_time
+                        previous_disk_time = previous_disk_stats.read_time + previous_disk_stats.write_time
+
+                    disk_time_delta_ms = float(current_disk_time - previous_disk_time)
+                    if disk_time_delta_ms >= 0:
+                        disk_percentages.append((disk_time_delta_ms / (elapsed_seconds * 1000.0)) * 100.0)
+
+                if len(disk_percentages) > 0:
+                    disk_percent = max(disk_percentages)
 
         cls.last_disk_io = current_disk_io
         cls.last_disk_sample_time = current_time
+        # Fin cálculo del porcentaje de uso del disco
 
         with cls.monitor_lock:
             cls.add_cpu_usage(float(cpu_percent))
@@ -168,8 +188,8 @@ class Metrics:
     @classmethod
     def start_monitoring(cls, interval_seconds: float):
         cls.monitor_stop_event.clear()
-        cls._last_disk_io = None
-        cls._last_disk_sample_time = None
+        cls.last_disk_io = None
+        cls.last_disk_sample_time = None
         cls.monitor_thread = threading.Thread(
             target=cls._monitor_loop,
             args=(interval_seconds,),
