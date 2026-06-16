@@ -55,6 +55,7 @@ class ResNet50Pipeline:
             self.model = AutoModelForImageClassification.from_pretrained(str(self.model_folder_path))
             self.model.to(self.target.device)
             self.model.eval()
+            
         elif self.target.accelerator == Accelerator.NPU:
             self.model = RKNNLite()
             ret = self.model.load_rknn(self.model_folder_path / "resnet50.rknn")
@@ -64,8 +65,11 @@ class ResNet50Pipeline:
             ret = self.model.init_runtime()
             if ret != 0:
                 raise RuntimeError(f"Error al inicializar el runtime RKNN: código de error {ret}")
+            
         else:
             raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
+        
+        print("Modelo cargado exitosamente")
 
     def _image_to_tensor(self, sample: ImageSample) -> torch.Tensor:
         resized = sample.image.resize((self.image_size, self.image_size))
@@ -103,6 +107,7 @@ class ResNet50Pipeline:
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
             with torch.inference_mode():
                 return self.model(**model_inputs).logits
+            
         elif self.target.accelerator == Accelerator.NPU:
             rknn_outputs = self.model.inference(inputs=[model_inputs["pixel_values"]])
             if not rknn_outputs:
@@ -116,6 +121,7 @@ class ResNet50Pipeline:
                 return torch.from_numpy(raw_output)
 
             return torch.as_tensor(raw_output)
+        
         else:
             raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
 
@@ -163,6 +169,10 @@ class RetinaNetPipeline:
         self.image_size = 800
         self.confidence_threshold = 0.5
         self.labels = self._load_labels()
+        
+        # Normalización estándar para RetinaNet preentrenado en COCO
+        self.mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
+        self.std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
 
     def _resolve_tf_device(self) -> str:
         if self.target.accelerator == Accelerator.GPU:
@@ -176,34 +186,72 @@ class RetinaNetPipeline:
         print(f"Cargando modelo desde: {self.model_folder_path}")
         if not self.model_folder_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
-
-        self.tf_device = self._resolve_tf_device()
-        self.model = tf.saved_model.load(str(self.model_folder_path))
-        print(f"Modelo cargado exitosamente en {self.tf_device}")
+        
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            self.tf_device = self._resolve_tf_device()
+            self.model = tf.saved_model.load(str(self.model_folder_path))
+            print(f"Modelo cargado exitosamente en {self.tf_device}")
+            
+        elif self.target.accelerator == Accelerator.NPU:
+            self.model = RKNNLite()
+            ret = self.model.load_rknn(self.model_folder_path / "retinanet.rknn")
+            if ret != 0:
+                raise RuntimeError(f"Error al cargar el modelo RKNN: código de error {ret}")
+            
+            ret = self.model.init_runtime()
+            if ret != 0:
+                raise RuntimeError(f"Error al inicializar el runtime RKNN: código de error {ret}")
+            
+        else:
+            raise RuntimeError(f"Acelerador no soportado para RetinaNet: {self.target.accelerator}")
 
     def _image_to_tensor(self, sample: ImageSample) -> tf.Tensor:
         resized = sample.image.resize((self.image_size, self.image_size))
         image_array = np.array(resized, dtype=np.float32)
         return tf.convert_to_tensor(image_array)
 
-    def preprocess(self, sample: ImageSample) -> dict[str, tf.Tensor]:
+    def _image_to_numpy(self, sample: ImageSample) -> np.ndarray:
+        resized = sample.image.resize((self.image_size, self.image_size))
+        image_array = np.asarray(resized, dtype=np.float32)
+        image_array = image_array * self.std + self.mean
+        image_array = np.transpose(image_array, (2, 0, 1))
+        return np.ascontiguousarray(image_array[None, ...])
+
+    def preprocess(self, sample: ImageSample) -> dict[str, Any]:
         print(f"Preprocesando muestra: {sample.path}")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
         
-        tensor = self._image_to_tensor(sample)
-        batch = tf.expand_dims(tensor, axis=0)
+        batch = None
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            tensor = self._image_to_tensor(sample)
+            batch = tf.expand_dims(tensor, axis=0)
+        elif self.target.accelerator == Accelerator.NPU:
+            batch = self._image_to_numpy(sample)
+        else:
+            raise RuntimeError(f"Acelerador no soportado para RetinaNet: {self.target.accelerator}")
+            
         return {"input_tensor": batch}
 
-    def predict(self, model_inputs: dict[str, tf.Tensor]) -> dict:
+    def predict(self, model_inputs: dict[str, Any]) -> dict:
         print("Ejecutando inferencia en el modelo")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
 
-        concrete_func = self.model.signatures["serving_default"]
-        with tf.device(self.tf_device):
-            detections = concrete_func(input_1=model_inputs["input_tensor"])
-        return detections
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            concrete_func = self.model.signatures["serving_default"]
+            with tf.device(self.tf_device):
+                detections = concrete_func(input_1=model_inputs["input_tensor"])
+            return detections
+        
+        elif self.target.accelerator == Accelerator.NPU:
+            rknn_outputs = self.model.inference(inputs=[model_inputs["input_tensor"]])
+            if not rknn_outputs:
+                raise RuntimeError("RKNN no devolvió salidas")
+            return rknn_outputs
+        
+        else:
+            raise RuntimeError(f"Acelerador no soportado para RetinaNet: {self.target.accelerator}")
 
     def _load_labels(self) -> list[str]:
         if self.labels_path is None or not self.labels_path.exists():
@@ -230,6 +278,36 @@ class RetinaNetPipeline:
         
         return f"class_{class_id}"
 
+    def _normalize_retinanet_output(self, raw_output: np.ndarray) -> np.ndarray:
+        '''
+        Normaliza la salida de RetinaNet para que tenga la forma (N, 84), donde N es el número de predicciones.
+        '''
+        output = np.asarray(raw_output)
+        output = np.squeeze(output)
+
+        # Si la salida es un tensor 3D, verificamos si la última dimensión es 84 (número de clases + 4 coordenadas de caja)
+        if output.ndim == 3:
+            if output.shape[-1] == 84:
+                return output[0] if output.shape[0] == 1 else output
+
+            if output.shape[1] == 84:
+                transposed = np.transpose(output, (0, 2, 1))
+                return transposed[0] if transposed.shape[0] == 1 else transposed
+
+        # Si la salida es un tensor 2D, verificamos si alguna de las dimensiones es 84
+        if output.ndim == 2:
+            if output.shape[-1] == 84:
+                return output
+
+            if output.shape[0] == 84:
+                return output.T
+
+        # Si la salida es un tensor 1D, verificamos si su tamaño es múltiplo de 84
+        if output.ndim == 1 and output.size % 84 == 0:
+            return output.reshape((-1, 84))
+
+        raise ValueError(f"Formato de salida no soportado en RetinaNet: shape={output.shape}")
+
     def decode(self, logits: object, top_k: int = 5) -> list[dict[str, object]]:
         print("Decodificando resultados de inferencia")
 
@@ -240,14 +318,14 @@ class RetinaNetPipeline:
             output_tensor = next(iter(logits.values()))
 
         raw_output = np.asarray(output_tensor)
-        if raw_output.ndim != 3 or raw_output.shape[0] == 0 or raw_output.shape[-1] <= 4:
-            raise ValueError(f"Formato de salida no soportado en RetinaNet: shape={raw_output.shape}")
+        
+        sample_output = self._normalize_retinanet_output(raw_output)
+        if sample_output.shape[-1] <= 4:
+            raise ValueError(f"Formato de salida no soportado en RetinaNet: shape={sample_output.shape}")
 
-        # Formato esperado: (batch, anchors, 4 + num_classes)
-        sample_output = raw_output[0]
-        class_logits = sample_output[:, 4:]
-
+        class_logits = sample_output[:, 4:] 
         class_scores = 1.0 / (1.0 + np.exp(-class_logits))
+        
         best_class_ids = np.argmax(class_scores, axis=1)
         best_scores = np.max(class_scores, axis=1)
 
