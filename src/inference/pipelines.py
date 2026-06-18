@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, cast
 from datetime import datetime
+import ctypes
 import os
 
 import numpy as np
@@ -14,6 +15,7 @@ from rknnlite.api import RKNNLite
 
 from inference.contracts import AudioSample, ImageSample, TextSample
 from data import ExecutionTarget, Accelerator
+from inference.rkllm_lib.lib import RKLLMParam, RKLLMExtendParam, CALLBACK_FUNC, c_callback, RKLLMInput, RKLLMInferParam, _RKLLMInputUnion, RKLLM_INPUT_PROMPT, RKLLM_INFER_GENERATE, text_buffer
 
 # Silencia los logs de UNEXPECTED keys
 hf_logging.set_verbosity_error()
@@ -214,7 +216,7 @@ class RetinaNetPipeline:
         resized = sample.image.resize((self.image_size, self.image_size))
         image_array = np.asarray(resized, dtype=np.float32)
         image_array = image_array * self.std + self.mean
-        image_array = np.transpose(image_array, (2, 0, 1))
+        image_array = np.transpose(image_array, (2, 0, 1)) # Cambiamos de HWC a CHW
         return np.ascontiguousarray(image_array[None, ...])
 
     def preprocess(self, sample: ImageSample) -> dict[str, Any]:
@@ -384,106 +386,225 @@ class TinyLlamaPipeline:
         self.target = target
         self.model: Any = None
         self.tokenizer: Any = None
-        self.max_input_chars = 1200
+        self.max_input_chars = 4000
         self.max_output_tokens = 50
+        
+        # Para la NPU
+        self.model_handler = ctypes.c_void_p()
 
     def load(self) -> None:
         print(f"Cargando modelo desde: {self.model_folder_path}")
         if not self.model_folder_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
+        
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            try:
+                self.tokenizer = LlamaTokenizer.from_pretrained(
+                    str(self.model_folder_path),
+                    local_files_only=True,
+                )
+            except Exception as tokenizer_error:
+                raise RuntimeError(f"Error al cargar el tokenizer de TinyLlama: {tokenizer_error}")
 
-        try:
-            self.tokenizer = LlamaTokenizer.from_pretrained(
+            # Configurar pad token si no existe
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+            
+            self.model = AutoModelForCausalLM.from_pretrained(
                 str(self.model_folder_path),
+                torch_dtype=torch.float32,
                 local_files_only=True,
             )
-        except Exception as tokenizer_error:
-            raise RuntimeError(f"Error al cargar el tokenizer de TinyLlama: {tokenizer_error}")
-
-        # Configurar pad token si no existe
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.model.to(self.target.device)
+            self.model.eval()
+            
+        elif self.target.accelerator == Accelerator.NPU:
+            self.model = ctypes.CDLL("/usr/lib/librkllmrt.so")
+            
+            model_params = RKLLMParam(
+                model_path=str(self.model_folder_path / "tinyllama.rkllm").encode('utf-8'),
+                max_context_len=self.max_input_chars,
+                max_new_tokens=self.max_output_tokens,
+                top_k=1,
+                n_keep=-1,
+                top_p=0,
+                temperature=0.0,
+                repeat_penalty=1.0,
+                frequency_penalty=0.0,
+                presence_penalty=0.0,
+                mirostat=0,
+                mirostat_tau=0.0,
+                mirostat_eta=0.0,
+                skip_special_token=True,
+                is_async=False,
+                img_start=b"",
+                img_end=b"",
+                img_content=b"",
+                extend_param=RKLLMExtendParam(
+                    base_domain_id=1,
+                    embed_flash=0,
+                    enabled_cpus_num=4,
+                    enabled_cpus_mask=240,
+                    n_batch=1,
+                    use_cross_attn=0,
+                    reserved=(ctypes.c_uint8 * 104)()
+                )
+            )
+            
+            self.model.rkllm_init.argtypes = [
+                ctypes.POINTER(ctypes.c_void_p), 
+                ctypes.POINTER(RKLLMParam), 
+                CALLBACK_FUNC
+            ]
+            self.model.rkllm_init.restype = ctypes.c_int
+            ret = self.model.rkllm_init(ctypes.byref(self.model_handler), ctypes.byref(model_params), c_callback)
+            if ret != 0:
+                raise RuntimeError(f"Error al inicializar TinyLlama en la NPU: código de error {ret}")
         
-        self.model = AutoModelForCausalLM.from_pretrained(
-            str(self.model_folder_path),
-            torch_dtype=torch.float32,
-            local_files_only=True,
-        )
-        self.model.to(self.target.device)
-        self.model.eval()
+        else:
+            raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
+        
         print("Modelo cargado exitosamente")
 
     def preprocess(self, sample: TextSample) -> dict[str, Any]:
         print(f"Preprocesando muestra: {sample.path}")
-        tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
-        if tokenizer is None:
-            raise RuntimeError("El modelo todavía no está cargado")
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
+            if tokenizer is None:
+                raise RuntimeError("El modelo todavía no está cargado")
 
-        prompt_text = sample.prompt[:self.max_input_chars]
-        prompt = f"Summarize the following news article:\n\n{prompt_text}"
-        tokenized_inputs = tokenizer(prompt, return_tensors="pt", truncation=True).to(self.target.device)
-        input_length = tokenized_inputs["input_ids"].shape[1]
-        return {
-            "input_ids": tokenized_inputs["input_ids"],
-            "attention_mask": tokenized_inputs["attention_mask"],
-            "input_length": torch.tensor([input_length], device=self.target.device)
-        }
+            prompt_text = sample.prompt[:self.max_input_chars]
+            prompt = f"Summarize the following news article:\n\n{prompt_text}"
+            tokenized_inputs = tokenizer(prompt, return_tensors="pt", truncation=True).to(self.target.device)
+            input_length = tokenized_inputs["input_ids"].shape[1]
+            return {
+                "input_ids": tokenized_inputs["input_ids"],
+                "attention_mask": tokenized_inputs["attention_mask"],
+                "input_length": torch.tensor([input_length], device=self.target.device)
+            }
+            
+        elif self.target.accelerator == Accelerator.NPU:
+            prompt_text = sample.prompt[:self.max_input_chars]
+            prompt = f"Summarize the following news article:\n\n{prompt_text}"
+            return {
+                "prompt": prompt
+            }
+            
+        else:
+            raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
 
     def predict(self, model_inputs: dict[str, Any]) -> dict[str, torch.Tensor]:
         print("Ejecutando inferencia en el modelo")
-        model = self.model # Guardamos en variable local para evitar problemas de acceso
-        tokenizer = self.tokenizer
-        if model is None or tokenizer is None:
-            raise RuntimeError("El modelo todavía no está cargado")
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            model = self.model # Guardamos en variable local para evitar problemas de acceso
+            tokenizer = self.tokenizer
+            if model is None or tokenizer is None:
+                raise RuntimeError("El modelo todavía no está cargado")
 
-        with torch.inference_mode():
-            output_ids = model.generate(
-                model_inputs["input_ids"],
-                attention_mask=model_inputs["attention_mask"],
-                min_new_tokens=8,
-                max_new_tokens=self.max_output_tokens,
-                temperature=0, # Determinista
-                do_sample=False, # Greedy decoding
-                pad_token_id=tokenizer.eos_token_id,
-                return_dict_in_generate=False,
+            with torch.inference_mode():
+                output_ids = model.generate(
+                    model_inputs["input_ids"],
+                    attention_mask=model_inputs["attention_mask"],
+                    min_new_tokens=8,
+                    max_new_tokens=self.max_output_tokens,
+                    temperature=0, # Determinista
+                    do_sample=False, # Greedy decoding
+                    pad_token_id=tokenizer.eos_token_id,
+                    return_dict_in_generate=False,
+                )
+
+            if not isinstance(output_ids, torch.Tensor):
+                raise RuntimeError("TinyLlama devolvió un formato de generación no soportado")
+
+            return {
+                "output_ids": output_ids,
+                "input_length": model_inputs["input_length"]
+            }
+            
+        elif self.target.accelerator == Accelerator.NPU:
+            model = self.model # Guardamos en variable local para evitar problemas de acceso
+            if model is None:
+                raise RuntimeError("El modelo todavía no está cargado")
+
+            prompt = model_inputs["prompt"].encode('utf-8')
+            input_data = RKLLMInput(
+                role=b"user",
+                enable_thinking=False,
+                input_type=RKLLM_INPUT_PROMPT,
+                _input=_RKLLMInputUnion(
+                    prompt_input=prompt,
+                    embed_input=None,
+                    token_input=None,
+                    multimodal_input=None
+                )
             )
-
-        if not isinstance(output_ids, torch.Tensor):
-            raise RuntimeError("TinyLlama devolvió un formato de generación no soportado")
-
-        return {
-            "output_ids": output_ids,
-            "input_length": model_inputs["input_length"]
-        }
+            
+            infer_params = RKLLMInferParam(
+                mode=RKLLM_INFER_GENERATE,
+                lora_params=None,
+                prompt_cache_params=None,
+                keep_history=0
+            )
+            
+            text_buffer.clear()
+            
+            self.model.rkllm_run.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(RKLLMInput),
+                ctypes.POINTER(RKLLMInferParam),
+                ctypes.c_void_p
+            ]
+            self.model.rkllm_run.restype = ctypes.c_int
+            ret = model.rkllm_run(self.model_handler, ctypes.byref(input_data), ctypes.byref(infer_params), None)
+            if ret != 0:
+                raise RuntimeError(f"Error al ejecutar la inferencia en TinyLlama: código de error {ret}")
+            
+            return {
+                "output_text": "".join(text_buffer)
+            }
+            
+        else:
+            raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
 
     def decode(self, logits: dict[str, Any], top_k: int = 5) -> list[dict[str, object]]:
         print("Decodificando resultados de inferencia")
-        tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
-        if tokenizer is None:
-            raise RuntimeError("El modelo todavía no está cargado")
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
+            if tokenizer is None:
+                raise RuntimeError("El modelo todavía no está cargado")
 
-        if "output_ids" not in logits or "input_length" not in logits:
-            raise ValueError("Formato de salida no soportado en TinyLlama")
+            if "output_ids" not in logits or "input_length" not in logits:
+                raise ValueError("Formato de salida no soportado en TinyLlama")
 
-        output_ids = logits["output_ids"]
-        input_length = int(logits["input_length"][0].item())
+            output_ids = logits["output_ids"]
+            input_length = int(logits["input_length"][0].item())
 
-        continuation_ids = output_ids[0][input_length:]
-        continuation_text = tokenizer.decode(continuation_ids, skip_special_tokens=True).strip()
+            continuation_ids = output_ids[0][input_length:]
+            continuation_text = tokenizer.decode(continuation_ids, skip_special_tokens=True).strip()
 
-        if continuation_text:
-            display_text = continuation_text
+            if continuation_text:
+                display_text = continuation_text
+            else:
+                full_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+                display_text = full_text if full_text else "[sin texto generado]"
+
+            predictions: list[dict[str, object]] = [
+                {
+                    "text": display_text
+                }
+            ]
+
+            return predictions
+        
+        elif self.target.accelerator == Accelerator.NPU:
+            return [
+                {
+                    "text": logits["output_text"]
+                }
+            ]
+            
         else:
-            full_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
-            display_text = full_text if full_text else "[sin texto generado]"
-
-        predictions: list[dict[str, object]] = [
-            {
-                "text": display_text
-            }
-        ]
-
-        return predictions
+            raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
 
     def infer(self, sample: TextSample, top_k: int = 5) -> list[dict[str, object]]:
         print(f"Inferiendo muestra: {sample.path}")
@@ -498,7 +619,7 @@ class TinyLlamaPipeline:
             return
         
         if self.target.accelerator == Accelerator.NPU:
-            self.model.release()
+            self.model.rkllm_destroy(self.model_handler)
             
 
 # MARK: Stable Diffusion 1.5
