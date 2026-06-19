@@ -1,0 +1,1 @@
+Librería RKLLM modificada a partir de https://github.com/NotPunchnox/rkllama, por NotPunchnox.
