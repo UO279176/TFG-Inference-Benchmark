@@ -5,6 +5,7 @@ import ctypes
 import os
 
 import numpy as np
+import json
 import torch
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline
 from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizerFast
@@ -12,11 +13,13 @@ from transformers.utils import logging as hf_logging
 import tensorflow as tf
 from nemo.collections.asr.models import ASRModel
 from rknnlite.api import RKNNLite
+from diffusers.schedulers import LCMScheduler
 
 from inference.contracts import AudioSample, ImageSample, TextSample
 from data import ExecutionTarget, Accelerator
-from inference.rkllm_lib.rkllm import RKLLM
-from inference.rkllm_lib.variables import global_text
+from inference.rkllm_tl_lib.rkllm import RKLLM
+from inference.rkllm_tl_lib.variables import global_text
+from inference.rknn_sd_lib.rknn_sd import RKNN2LatentConsistencyPipeline, RKNN2Model
 
 # Silencia los logs de UNEXPECTED keys
 hf_logging.set_verbosity_error()
@@ -563,7 +566,7 @@ class StableDiffusion15Pipeline:
     ):
         self.model_folder_path = model_folder_path
         self.target = target
-        self.pipeline = None
+        self.model = None
         self.num_inference_steps = 8 # A mayor cantidad de pasos mejora calidad pero aumenta tiempo de inferencia
         self.guidance_scale = 7.5 # A mayor guidance scale, más se adhiere la generación al prompt pero puede perder creatividad
         self.height = 256
@@ -577,58 +580,106 @@ class StableDiffusion15Pipeline:
         if not self.model_folder_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
 
-        self.pipeline = StableDiffusionPipeline.from_pretrained(
-            str(self.model_folder_path),
-            torch_dtype=torch.float32,
-            local_files_only=True,
-            safety_checker=None,
-            feature_extractor=None,
-            requires_safety_checker=False,
-        )
-
-        self.pipeline.to(self.target.device)
-        self.pipeline.enable_attention_slicing()
-        self.pipeline.set_progress_bar_config(disable=True)
         self.output_folder_path.mkdir(parents=True, exist_ok=True)
+        
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            self.model = StableDiffusionPipeline.from_pretrained(
+                str(self.model_folder_path),
+                torch_dtype=torch.float32,
+                local_files_only=True,
+                safety_checker=None,
+                feature_extractor=None,
+                requires_safety_checker=False,
+            )
+
+            self.model.to(self.target.device)
+            self.model.enable_attention_slicing()
+            self.model.set_progress_bar_config(disable=True)
+            
+        elif self.target.accelerator == Accelerator.NPU:
+            scheduler_config_path = str(self.model_folder_path / "scheduler" / "scheduler_config.json")
+            with open(scheduler_config_path, "r") as f:
+                scheduler_config = json.load(f)
+            user_specified_scheduler = LCMScheduler.from_config(scheduler_config)
+
+            self.model = RKNN2LatentConsistencyPipeline(
+                text_encoder=RKNN2Model(os.path.join(self.model_folder_path, "text_encoder")),
+                unet=RKNN2Model(os.path.join(self.model_folder_path, "unet")),
+                vae_decoder=RKNN2Model(os.path.join(self.model_folder_path, "vae_decoder")),
+                scheduler=user_specified_scheduler,
+                tokenizer=CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch16"),
+            )
+        
         print("Modelo cargado exitosamente")
 
     def preprocess(self, sample: TextSample) -> dict[str, object]:
         print(f"Preprocesando muestra: {sample.path}")
-        if self.pipeline is None:
+        if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
 
-        assert self.target.device is not None
-        generator = torch.Generator(device=self.target.device.type).manual_seed(self.seed)
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            assert self.target.device is not None
+            generator = torch.Generator(device=self.target.device.type).manual_seed(self.seed)
+            
+            return {
+                "sample_path": sample.path,
+                "prompt": sample.prompt,
+                "generator": generator,
+            }
         
-        return {
-            "sample_path": sample.path,
-            "prompt": sample.prompt,
-            "generator": generator,
-        }
+        elif self.target.accelerator == Accelerator.NPU:
+            generator = np.random.RandomState(self.seed)
+            
+            return {
+                "sample_path": sample.path,
+                "prompt": sample.prompt,
+                "generator": generator,
+            }
 
     def predict(self, model_inputs: dict[str, object]) -> dict[str, object]:
         print("Ejecutando inferencia en el modelo")
-        if self.pipeline is None:
+        if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
 
-        prompt: Any = model_inputs["prompt"]
-        generator: Any = model_inputs["generator"]
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            prompt: Any = model_inputs["prompt"]
+            generator: Any = model_inputs["generator"]
 
-        result: Any = self.pipeline(
-            prompt=prompt,
-            num_inference_steps=self.num_inference_steps,
-            guidance_scale=self.guidance_scale,
-            height=self.height,
-            width=self.width,
-            generator=generator,
-        )
+            result: Any = self.model(
+                prompt=prompt,
+                num_inference_steps=self.num_inference_steps,
+                guidance_scale=self.guidance_scale,
+                height=self.height,
+                width=self.width,
+                generator=generator,
+            )
 
-        image: Any = result.images[0]
-        return {
-            "sample_path": model_inputs["sample_path"],
-            "prompt": prompt,
-            "image": image,
-        }
+            image: Any = result.images[0]
+            return {
+                "sample_path": model_inputs["sample_path"],
+                "prompt": prompt,
+                "image": image,
+            }
+        
+        elif self.target.accelerator == Accelerator.NPU:
+            prompt = model_inputs["prompt"]
+            generator = model_inputs["generator"]
+            
+            result = self.model(
+                prompt=prompt,
+                height=self.height,
+                width=self.width,
+                num_inference_steps=self.num_inference_steps,
+                guidance_scale=self.guidance_scale,
+                generator=generator,
+            )
+            
+            image = result["images"][0]
+            return {
+                "sample_path": model_inputs["sample_path"],
+                "prompt": prompt,
+                "image": image,
+            }
 
     def decode(self, logits: dict[str, object], top_k: int = 5) -> list[dict[str, object]]:
         print("Decodificando resultados de inferencia")
@@ -673,12 +724,12 @@ class StableDiffusion15Pipeline:
 
     def unload(self) -> None:
         print("Descargando modelo de memoria")
-        if self.pipeline is None:
+        if self.model is None:
             print("El modelo ya estaba descargado")
             return
         
         if self.target.accelerator == Accelerator.NPU:
-            self.pipeline.release()
+            self.model.release()
             
 
 # MARK: RNNT

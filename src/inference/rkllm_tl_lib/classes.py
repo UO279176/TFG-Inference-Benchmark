@@ -5,7 +5,7 @@ PROMPT_TEXT_PREFIX = "<|user|>"
 PROMPT_TEXT_POSTFIX = "</s><|assistant|>"
 
 # Définir le chemin de la bibliothèque dynamique
-library_path = os.path.expanduser('src/inference/rkllm_lib/librkllmrt.so')
+library_path = os.path.expanduser('/usr/lib/librkllmrt.so')
 rkllm_lib = ctypes.CDLL(library_path)
 
 # Définir les structures de la bibliothèque

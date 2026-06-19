@@ -1,0 +1,1 @@
+Librería para ejecutar Stable Diffusion con la NPU modificada a partir de https://huggingface.co/thanhtantran/Stable-Diffusion-1.5-LCM-ONNX-RKNN2, por Tony Tran
