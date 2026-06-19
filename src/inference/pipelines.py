@@ -7,7 +7,7 @@ import os
 import numpy as np
 import torch
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline
-from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizer
+from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizerFast
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
 from nemo.collections.asr.models import ASRModel
@@ -15,7 +15,8 @@ from rknnlite.api import RKNNLite
 
 from inference.contracts import AudioSample, ImageSample, TextSample
 from data import ExecutionTarget, Accelerator
-from inference.rkllm_lib.lib import RKLLMParam, RKLLMExtendParam, CALLBACK_FUNC, c_callback, RKLLMInput, RKLLMInferParam, _RKLLMInputUnion, RKLLM_INPUT_PROMPT, RKLLM_INFER_GENERATE, text_buffer
+from inference.rkllm_lib.rkllm import RKLLM
+from inference.rkllm_lib.variables import global_text
 
 # Silencia los logs de UNEXPECTED keys
 hf_logging.set_verbosity_error()
@@ -388,9 +389,6 @@ class TinyLlamaPipeline:
         self.tokenizer: Any = None
         self.max_input_chars = 4000
         self.max_output_tokens = 50
-        
-        # Para la NPU
-        self.model_handler = ctypes.c_void_p()
 
     def load(self) -> None:
         print(f"Cargando modelo desde: {self.model_folder_path}")
@@ -399,9 +397,9 @@ class TinyLlamaPipeline:
         
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
             try:
-                self.tokenizer = LlamaTokenizer.from_pretrained(
+                self.tokenizer = LlamaTokenizerFast.from_pretrained(
                     str(self.model_folder_path),
-                    local_files_only=True,
+                    local_files_only=True
                 )
             except Exception as tokenizer_error:
                 raise RuntimeError(f"Error al cargar el tokenizer de TinyLlama: {tokenizer_error}")
@@ -419,47 +417,11 @@ class TinyLlamaPipeline:
             self.model.eval()
             
         elif self.target.accelerator == Accelerator.NPU:
-            self.model = ctypes.CDLL("/usr/lib/librkllmrt.so")
-            
-            model_params = RKLLMParam(
-                model_path=str(self.model_folder_path / "tinyllama.rkllm").encode('utf-8'),
+            self.model = RKLLM(
+                str(self.model_folder_path / "tinyllama.rkllm"),
                 max_context_len=self.max_input_chars,
-                max_new_tokens=self.max_output_tokens,
-                top_k=1,
-                n_keep=-1,
-                top_p=0,
-                temperature=0.0,
-                repeat_penalty=1.0,
-                frequency_penalty=0.0,
-                presence_penalty=0.0,
-                mirostat=0,
-                mirostat_tau=0.0,
-                mirostat_eta=0.0,
-                skip_special_token=True,
-                is_async=False,
-                img_start=b"",
-                img_end=b"",
-                img_content=b"",
-                extend_param=RKLLMExtendParam(
-                    base_domain_id=1,
-                    embed_flash=0,
-                    enabled_cpus_num=4,
-                    enabled_cpus_mask=240,
-                    n_batch=1,
-                    use_cross_attn=0,
-                    reserved=(ctypes.c_uint8 * 104)()
-                )
+                max_new_tokens=self.max_output_tokens
             )
-            
-            self.model.rkllm_init.argtypes = [
-                ctypes.POINTER(ctypes.c_void_p), 
-                ctypes.POINTER(RKLLMParam), 
-                CALLBACK_FUNC
-            ]
-            self.model.rkllm_init.restype = ctypes.c_int
-            ret = self.model.rkllm_init(ctypes.byref(self.model_handler), ctypes.byref(model_params), c_callback)
-            if ret != 0:
-                raise RuntimeError(f"Error al inicializar TinyLlama en la NPU: código de error {ret}")
         
         else:
             raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
@@ -522,45 +484,14 @@ class TinyLlamaPipeline:
             }
             
         elif self.target.accelerator == Accelerator.NPU:
-            model = self.model # Guardamos en variable local para evitar problemas de acceso
-            if model is None:
+            if self.model is None:
                 raise RuntimeError("El modelo todavía no está cargado")
-
-            prompt = model_inputs["prompt"].encode('utf-8')
-            input_data = RKLLMInput(
-                role=b"user",
-                enable_thinking=False,
-                input_type=RKLLM_INPUT_PROMPT,
-                _input=_RKLLMInputUnion(
-                    prompt_input=prompt,
-                    embed_input=None,
-                    token_input=None,
-                    multimodal_input=None
-                )
-            )
             
-            infer_params = RKLLMInferParam(
-                mode=RKLLM_INFER_GENERATE,
-                lora_params=None,
-                prompt_cache_params=None,
-                keep_history=0
-            )
-            
-            text_buffer.clear()
-            
-            self.model.rkllm_run.argtypes = [
-                ctypes.c_void_p,
-                ctypes.POINTER(RKLLMInput),
-                ctypes.POINTER(RKLLMInferParam),
-                ctypes.c_void_p
-            ]
-            self.model.rkllm_run.restype = ctypes.c_int
-            ret = model.rkllm_run(self.model_handler, ctypes.byref(input_data), ctypes.byref(infer_params), None)
-            if ret != 0:
-                raise RuntimeError(f"Error al ejecutar la inferencia en TinyLlama: código de error {ret}")
+            global_text.clear()
+            self.model.run(model_inputs["prompt"])
             
             return {
-                "output_text": "".join(text_buffer)
+                "output_text": "".join(global_text)
             }
             
         else:
@@ -619,7 +550,7 @@ class TinyLlamaPipeline:
             return
         
         if self.target.accelerator == Accelerator.NPU:
-            self.model.rkllm_destroy(self.model_handler)
+            self.model.release()
             
 
 # MARK: Stable Diffusion 1.5
