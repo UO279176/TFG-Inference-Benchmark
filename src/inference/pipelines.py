@@ -8,7 +8,7 @@ import numpy as np
 import json
 import torch
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline
-from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizerFast
+from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizerFast, CLIPTokenizer
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
 from nemo.collections.asr.models import ASRModel

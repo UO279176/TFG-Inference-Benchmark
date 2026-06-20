@@ -1,7 +1,12 @@
+'''
+Clase alternativa donde se cargan los modelos individualmente. Provoca muchísimo más tiempo de inferencia, pero permite ejecutar el modelo
+en dispositivos con RAM escasa.
+'''
 
 import argparse
 import json
 import time
+import gc  # IMPORTANTE: Añadido para forzar la limpieza de RAM
 
 import PIL
 from diffusers import StableDiffusionPipeline
@@ -31,22 +36,36 @@ class RKNN2Model:
     """ Wrapper for running RKNPU2 models """
 
     def __init__(self, model_dir):
-        logger.info(f"Loading {model_dir}")
-        start = time.time()
+        self.model_dir = model_dir
         self.config = json.load(open(os.path.join(model_dir, "config.json")))
         assert os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "model.rknn"))
-        self.rknnlite = RKNNLite()
-        self.rknnlite.load_rknn(os.path.join(model_dir, "model.rknn"))
-        self.rknnlite.init_runtime(core_mask=RKNNLite.NPU_CORE_AUTO) # Multi-core will cause kernel crash
-        load_time = time.time() - start
-        logger.info(f"Done. Took {load_time:.1f} seconds.")
         self.modelname = model_dir.split("/")[-1]
         self.inference_time = 0
+        self.rknnlite = None # Se inicializará cuando se llame a load()
+
+    def load(self):
+        """Carga el modelo en la memoria CMA de la NPU"""
+        logger.info(f"--- Cargando {self.modelname} en NPU ---")
+        start = time.time()
+        self.rknnlite = RKNNLite()
+        self.rknnlite.load_rknn(os.path.join(self.model_dir, "model.rknn"))
+        self.rknnlite.init_runtime(core_mask=RKNNLite.NPU_CORE_AUTO)
+        load_time = time.time() - start
+        logger.info(f"Carga completada en {load_time:.1f} segundos.")
+
+    def release(self):
+        """Descarga el modelo de la NPU y fuerza la limpieza de la RAM"""
+        if self.rknnlite is not None:
+            logger.info(f"--- Liberando {self.modelname} de NPU ---")
+            self.rknnlite.release()
+            self.rknnlite = None
+            gc.collect() # Obliga a Linux a reclamar la memoria
+            logger.info("Memoria liberada con éxito.")
 
     def __call__(self, **kwargs) -> List[np.ndarray]:
-        # np.savez(f"rknn_out/{self.modelname}_input_{self.inference_time}.npz", **kwargs)
-        # self.inference_time += 1
-        #print(kwargs)
+        if self.rknnlite is None:
+            raise RuntimeError(f"El modelo {self.modelname} no está cargado. Llama a .load() primero.")
+            
         input_list = [value for key, value in kwargs.items()]
         # for i, input in enumerate(input_list):
         #     if isinstance(input, np.ndarray):
@@ -420,6 +439,10 @@ class RKNN2LatentConsistencyPipeline(DiffusionPipeline):
         if generator is None:
             generator = np.random.RandomState()
 
+        # ==========================================
+        # FASE 1: TEXT ENCODER
+        # ==========================================
+        self.text_encoder.load()
         start_time = time.time()
         prompt_embeds = self._encode_prompt(
             prompt,
@@ -431,8 +454,11 @@ class RKNN2LatentConsistencyPipeline(DiffusionPipeline):
         )
         encode_prompt_time = time.time() - start_time
         print(f"Prompt encoding time: {encode_prompt_time:.2f}s")
+        self.text_encoder.release() # Descargamos inmediatamente
 
-        # set timesteps
+        # ==========================================
+        # PREPARACIÓN DE LATENTES (CPU)
+        # ==========================================
         self.scheduler.set_timesteps(num_inference_steps, original_inference_steps=original_inference_steps)
         timesteps = self.scheduler.timesteps
 
@@ -457,16 +483,32 @@ class RKNN2LatentConsistencyPipeline(DiffusionPipeline):
         timestep_dtype = np.int64
         
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
+        
+        # ==========================================
+        # FASE 2: UNET (LCM)
+        # ==========================================
+        self.unet.load()
         inference_start = time.time()
         for i, t in enumerate(self.progress_bar(timesteps)):
             timestep = np.array([t], dtype=timestep_dtype)
-            noise_pred = self.unet(
-                sample=latents,
-                timestep=timestep,
-                encoder_hidden_states=prompt_embeds,
-                timestep_cond=w_embedding,
-            )[0]
+            
+            print(f"DEBUG: Latents shape: {latents.shape}")
+            print(f"DEBUG: Prompt shape: {prompt_embeds.shape}")
+            print(f"DEBUG: Timestep shape: {timestep.shape}")
+            print(f"DEBUG: Guidance shape: {w_embedding.shape}")
+            
+            try:
+                noise_pred = self.unet(
+                    sample=latents,
+                    timestep=timestep,
+                    encoder_hidden_states=prompt_embeds,
+                    timestep_cond=w_embedding,
+                )[0]
+            except Exception as e:
+                print(f"Error during UNet inference: {e}")
+                raise e
 
+            print("DEBUG: Noise prediction shape:", noise_pred.shape)
             # compute the previous noisy sample x_t -> x_t-1
             latents, denoised = self.scheduler.step(
                 torch.from_numpy(noise_pred), t, torch.from_numpy(latents), return_dict=False
@@ -479,12 +521,17 @@ class RKNN2LatentConsistencyPipeline(DiffusionPipeline):
                     callback(i, t, latents)
         inference_time = time.time() - inference_start
         print(f"Inference time: {inference_time:.2f}s")
+        self.unet.release()
 
+        # ==========================================
+        # FASE 3: VAE DECODER
+        # ==========================================
         decode_start = time.time()
         if output_type == "latent":
             image = denoised
             has_nsfw_concept = None
         else:
+            self.vae_decoder.load()
             denoised /= self.vae_decoder.config["scaling_factor"]
             # it seems likes there is a strange result for using half-precision vae decoder if batchsize>1
             image = np.concatenate(
@@ -492,6 +539,7 @@ class RKNN2LatentConsistencyPipeline(DiffusionPipeline):
             )
             # image, has_nsfw_concept = self.run_safety_checker(image)
             has_nsfw_concept = None  # skip safety checker
+            self.vae_decoder.release()
 
         if has_nsfw_concept is None:
             do_denormalize = [True] * image.shape[0]
@@ -539,13 +587,6 @@ class RKNN2LatentConsistencyPipeline(DiffusionPipeline):
 
         assert emb.shape == (w.shape[0], embedding_dim)
         return emb
-    
-    def release(self):
-        self.text_encoder.rknnlite.release()
-        self.unet.rknnlite.release()
-        self.vae_decoder.rknnlite.release()
-        if self.text_encoder_2 is not None:
-            self.text_encoder_2.rknnlite.release()
 
 def get_image_path(args, **override_kwargs):
     """ mkdir output folder and encode metadata in the filename

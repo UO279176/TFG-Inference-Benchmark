@@ -16,8 +16,10 @@ Para preparar el entorno de ejecución se utilizará Docker y se deben seguir lo
 6. Ejecutar el contenedor de Docker:
 - Si se va a usar GPU:
 ```docker run -it --rm --gpus all -v ./src/data:/app/src/data -v ./results:/app/results tfg-inference-benchmark <acelerador> <modelo>```
-- Si se va a usar NPU:
-```docker run -it --rm --privileged --device=/dev/dri/renderD129:/dev/dri/renderD129 -v ./src/data:/app/src/data -v ./results:/app/results -v /usr/lib/librknnrt.so:/usr/lib/librknnrt.so -v /usr/lib/librknnrt.so:/usr/lib/librkllmrt.so -v /dev/dri/renderD129:/dev/dri/renderD129 -v /proc/device-tree/compatible:/proc/device-tree/compatible tfg-inference-benchmark <acelerador> <modelo>```
+- Si se va a usar NPU con RKNN v2.3.0:
+```docker run -it --rm --privileged --device=/dev/dri/renderD128:/dev/dri/renderD128 -v ./src/data:/app/src/data -v ./results:/app/results -v ./src/data/libs/librknnrt_230.so:/usr/lib/librknnrt.so -v ./src/data/libs/librkllmrt.so:/usr/lib/librkllmrt.so -v /dev/dri/renderD128:/dev/dri/renderD128 -v /proc/device-tree/compatible:/proc/device-tree/compatible tfg-inference-benchmark <acelerador> <modelo>```
+- Si se va a usar NPU con RKNN v2.3.2:
+```docker run -it --rm --privileged --device=/dev/dri/renderD128:/dev/dri/renderD128 -v ./src/data:/app/src/data -v ./results:/app/results -v ./src/data/libs/librknnrt_232.so:/usr/lib/librknnrt.so -v ./src/data/libs/librkllmrt.so:/usr/lib/librkllmrt.so -v /dev/dri/renderD128:/dev/dri/renderD128 -v /proc/device-tree/compatible:/proc/device-tree/compatible tfg-inference-benchmark <acelerador> <modelo>```
 Ejecutar el contenedor sin parámetros mostrará la ayuda con las opciones disponibles.
 
 ### Notas adicionales
