@@ -7,6 +7,7 @@ import os
 import numpy as np
 import json
 import torch
+import torchaudio
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline
 from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizerFast, CLIPTokenizer
 from transformers.utils import logging as hf_logging
@@ -744,6 +745,11 @@ class RNNTPipeline:
         self.target = target
         self.model = None
 
+        # Para la NPU
+        self.labels_path = labels_path
+        self.labels = self._load_labels() # La lista de tokens
+        self.blank_id = 1024 # El token blank es necesario para la decodificación
+
     def _resolve_model_path(self) -> Path:
         nemo_files = sorted(self.model_folder_path.glob("*.nemo"))
         if not nemo_files:
@@ -752,26 +758,116 @@ class RNNTPipeline:
             )
         return nemo_files[0]
 
+    def _load_labels(self) -> list[str]:
+        if self.labels_path is None or not self.labels_path.exists():
+            print("Advertencia: No se encontró el archivo de etiquetas (tokens.txt).")
+            return []
+        
+        cleaned_labels = []
+        with self.labels_path.open("r", encoding="utf-8") as labels_file:
+            for line in labels_file:
+                token = line.strip()
+                
+                if "]" in token and token.startswith("["):
+                    token = token.split("]", 1)[1].strip()
+                    
+                cleaned_labels.append(token)
+                
+        return cleaned_labels
+
     def load(self) -> None:
         print(f"Cargando modelo desde: {self.model_folder_path}")
         if not self.model_folder_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
-        if self.target.accelerator == Accelerator.CPU:
+        
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
             # Para evitar que NeMo intente usar GPU cuando se ha especificado CPU, deshabilitamos la visibilidad de las GPUs a nivel de entorno
-            os.environ["CUDA_VISIBLE_DEVICES"] = ""
-            os.environ["NVIDIA_VISIBLE_DEVICES"] = "void"
+            if self.target.accelerator == Accelerator.CPU:
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+                os.environ["NVIDIA_VISIBLE_DEVICES"] = "void"
 
-        model_path = self._resolve_model_path()
-        loaded_model: Any = ASRModel.restore_from(
-            restore_path=str(model_path),
-            map_location=self.target.device,
-        )
-        self.model = loaded_model
-        model: Any = self.model
-        model.eval()
+            model_path = self._resolve_model_path()
+            loaded_model: Any = ASRModel.restore_from(
+                restore_path=str(model_path),
+                map_location=self.target.device,
+            )
+            self.model = loaded_model
+            model: Any = self.model
+            model.eval()
+            
+        elif self.target.accelerator == Accelerator.NPU:
+            self.model = [RKNNLite(), RKNNLite()]
+            
+            # Encoder
+            ret = self.model[0].load_rknn(self.model_folder_path / "rnnt_encoder.rknn")
+            if ret != 0: raise RuntimeError(f"Error cargando Encoder: {ret}")
+            ret = self.model[0].init_runtime()
+            if ret != 0: raise RuntimeError(f"Error inicializando Encoder: {ret}")
+            
+            # Decoder + Joint
+            ret = self.model[1].load_rknn(self.model_folder_path / "rnnt_decoder_joint.rknn")
+            if ret != 0: raise RuntimeError(f"Error cargando Decoder/Joint: {ret}")
+            ret = self.model[1].init_runtime()
+            if ret != 0: raise RuntimeError(f"Error inicializando Decoder/Joint: {ret}")
+            
+        else:
+            raise RuntimeError(f"Acelerador no soportado para RNNT: {self.target.accelerator}")
+        
         print("Modelo cargado exitosamente")
 
-    def preprocess(self, sample: AudioSample) -> dict[str, object]:
+    def _extract_mel_spectrogram(self, audio_path: str) -> np.ndarray:
+        # Cargar audio y asegurar 16kHz mono
+        waveform, sr = torchaudio.load(audio_path)
+        if sr != 16000:
+            waveform = torchaudio.functional.resample(waveform, orig_freq=sr, new_freq=16000)
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+            
+        # Parámetros exactos de NeMo Parakeet
+        win_length = int(0.025 * 16000) # 400 muestras
+        hop_length = int(0.01 * 16000)  # 160 muestras
+        n_fft = 512
+        
+        # Pre-énfasis (0.97)
+        padded_wav = torch.nn.functional.pad(waveform, (1, 0))
+        preemph_wav = padded_wav[:, 1:] - 0.97 * padded_wav[:, :-1]
+        
+        # ransformada de Fourier
+        window = torch.hann_window(win_length).to(preemph_wav.device)
+        stft = torch.stft(
+            preemph_wav,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            win_length=win_length,
+            window=window,
+            center=True,
+            return_complex=True
+        )
+        power_spec = torch.abs(stft) ** 2
+        
+        # Mel Filterbanks (Slaney norm)
+        mel_transform = torchaudio.transforms.MelScale(
+            n_mels=80,
+            sample_rate=16000,
+            f_min=0.0,
+            f_max=8000.0,
+            n_stft=n_fft // 2 + 1,
+            norm="slaney",
+            mel_scale="slaney"
+        ).to(preemph_wav.device)
+        
+        mel_spec = mel_transform(power_spec)
+        logmelspec = torch.log(mel_spec + 1e-5)
+        
+        # Normalización Per-Feature
+        logmelspec_np = logmelspec.numpy().astype(np.float32)
+        mean = np.mean(logmelspec_np, axis=2, keepdims=True)
+        std = np.std(logmelspec_np, axis=2, keepdims=True)
+        
+        logmelspec_norm = (logmelspec_np - mean) / (std + 1e-5)
+        return logmelspec_norm
+
+    def preprocess(self, sample: AudioSample) -> dict[str, Any]:
         print(f"Preprocesando muestra: {sample.path}")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
@@ -779,12 +875,33 @@ class RNNTPipeline:
         if not sample.audio_path.exists():
             raise FileNotFoundError(f"No se encontró el audio en la ruta: {sample.audio_path}")
 
-        return {
+        model_inputs = {
             "audio_path": str(sample.audio_path),
             "reference": sample.reference,
         }
 
-    def _normalize_transcription(self, raw_output: object) -> str:
+        if self.target.accelerator == Accelerator.NPU:
+            features = self._extract_mel_spectrogram(str(sample.audio_path))
+            
+            target_frames = 100
+            current_frames = features.shape[2]
+            
+            # Evadir el silencio inicial
+            start_frame = 40 if current_frames > 140 else 0
+            
+            features = features[:, :, start_frame:start_frame + target_frames]
+            current_frames = features.shape[2]
+            
+            if current_frames < target_frames:
+                pad_width = target_frames - current_frames
+                features = np.pad(features, ((0, 0), (0, 0), (0, pad_width)), mode='constant')
+                
+            model_inputs["audio_features"] = features
+            model_inputs["audio_length"] = np.array([current_frames], dtype=np.int32)
+
+        return model_inputs
+
+    def _normalize_transcription(self, raw_output: Any) -> str:
         if isinstance(raw_output, list) and raw_output:
             first_output = raw_output[0]
             if isinstance(first_output, str):
@@ -797,42 +914,139 @@ class RNNTPipeline:
 
         return str(raw_output).strip()
 
-    def predict(self, model_inputs: dict[str, object]) -> dict[str, object]:
+    def predict(self, model_inputs: dict[str, Any]) -> dict[str, Any]:
         print("Ejecutando inferencia en el modelo")
-        model: Any = self.model
-        if model is None:
+        if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
 
-        with torch.inference_mode():
-            raw_transcription = model.transcribe(
-                audio=[model_inputs["audio_path"]],
-                use_lhotse=False,
-                batch_size=1,
-            )
-
-        transcription = self._normalize_transcription(raw_transcription)
-        return {
-            "text": transcription,
-            "reference": model_inputs.get("reference"),
-        }
-
-    def decode(self, logits: dict[str, object], top_k: int = 5) -> list[dict[str, object]]:
-        print("Decodificando resultados de inferencia")
-        if "text" not in logits:
-            raise ValueError("Formato de salida no soportado en RNNT")
-
-        text = str(logits["text"]).strip()
-        if not text:
-            text = "[sin transcripción]"
-
-        return [
-            {
-                "text": text,
-                "reference": logits.get("reference"),
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            model: Any = self.model
+            
+            with torch.inference_mode():
+                raw_transcription = model.transcribe(
+                    audio=[model_inputs["audio_path"]],
+                    use_lhotse=False,
+                    batch_size=1,
+                )
+            
+            return {
+                "text": self._normalize_transcription(raw_transcription),
+                "reference": model_inputs.get("reference")
             }
-        ]
 
-    def infer(self, sample: AudioSample, top_k: int = 5) -> list[dict[str, object]]:
+        elif self.target.accelerator == Accelerator.NPU:
+            rknn_encoder = self.model[0]
+            rknn_decoder = self.model[1]
+            
+            features = model_inputs["audio_features"]
+            length = model_inputs["audio_length"]
+
+            encoder_outputs = rknn_encoder.inference(inputs=[features, length])[0]
+
+            hidden_states_1 = np.zeros((2, 1, 640), dtype=np.float32)
+            hidden_states_2 = np.zeros((2, 1, 640), dtype=np.float32)
+            
+            target = np.array([[self.blank_id]], dtype=np.int64)
+            target_length = np.array([1], dtype=np.int64)
+
+            predicted_tokens = []
+            T_enc = encoder_outputs.shape[1] if encoder_outputs.shape[-1] == 1024 else encoder_outputs.shape[-1]
+            
+            max_symbols_per_step = 5
+
+            # Se itera sobre cada milisegundo de audio (cada frame del encoder)
+            for t in range(T_enc):
+                if encoder_outputs.shape[-1] == 1024:
+                    enc_frame = encoder_outputs[:, t:t+1, :].transpose(0, 2, 1)
+                else:
+                    enc_frame = encoder_outputs[:, :, t:t+1]
+
+                if enc_frame.shape != (1, 1024, 1):
+                    enc_frame = enc_frame.reshape(1, 1024, 1)
+
+                symbols_added = 0 
+
+                while True:
+                    decoder_outputs = rknn_decoder.inference(
+                        inputs=[enc_frame, target, target_length, hidden_states_1, hidden_states_2]
+                    )
+
+                    joint_out, new_hidden_1, new_hidden_2 = None, None, None
+
+                    # Identificar los tensores de salida según su tamaño
+                    for out_tensor in decoder_outputs:
+                        if out_tensor.size == 1280:
+                            if new_hidden_1 is None:
+                                new_hidden_1 = out_tensor.reshape(2, 1, 640)
+                            else:
+                                new_hidden_2 = out_tensor.reshape(2, 1, 640)
+                        elif out_tensor.size > 1000:
+                            joint_out = out_tensor
+
+                    if joint_out is None:
+                        raise RuntimeError("No se encontró el tensor de logits en la salida de la NPU.")
+
+                    token = int(np.argmax(joint_out))
+                    
+                    # Si el token es BLANK, rompemos el bucle y pasamos al siguiente milisegundo de audio
+                    if token == self.blank_id or symbols_added >= max_symbols_per_step:
+                        break 
+                        
+                    # Solo si predice una letra real, guardamos y actualizamos la memoria de la red
+                    if new_hidden_1 is not None: hidden_states_1 = new_hidden_1
+                    if new_hidden_2 is not None: hidden_states_2 = new_hidden_2
+                    
+                    predicted_tokens.append(token)
+                    target = np.array([[token]], dtype=np.int64)
+                    symbols_added += 1
+
+            return {
+                "predicted_tokens": predicted_tokens,
+                "reference": model_inputs.get("reference")
+            }
+
+    def decode(self, logits: dict[str, Any], top_k: int = 5) -> list[dict[str, Any]]:
+        print("Decodificando resultados de inferencia")
+
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            if "text" not in logits:
+                raise ValueError("Formato de salida no soportado en RNNT")
+
+            text = str(logits["text"]).strip()
+            if not text:
+                text = "[sin transcripción]"
+            
+            return [{ "text": text, "reference": logits.get("reference") }]
+            
+        elif self.target.accelerator == Accelerator.NPU:
+            tokens = logits.get("predicted_tokens", [])
+            text_chars = []
+            
+            for token_id in tokens:
+                # Si el modelo predice 0, se salta
+                if token_id == self.blank_id: 
+                    continue
+                    
+                # Alinear el ID con el archivo de texto
+                if token_id < len(self.labels):
+                    char = self.labels[token_id]
+                    if char == "<unk>":
+                        continue
+                    
+                    # Reemplazar el marcador especial de espacio
+                    char = char.replace("▁", " ")
+                    text_chars.append(char)
+            
+            text = "".join(text_chars).replace("  ", " ").strip()
+            if not text:
+                text = "[sin transcripción]"
+            
+            return [{ "text": text, "reference": logits.get("reference") }]
+            
+        else:
+            raise RuntimeError(f"Acelerador no soportado para RNNT: {self.target.accelerator}")
+
+    def infer(self, sample: AudioSample, top_k: int = 5) -> list[dict[str, Any]]:
         print(f"Inferiendo muestra: {sample.path}")
         model_inputs = self.preprocess(sample)
         output = self.predict(model_inputs)
@@ -845,4 +1059,5 @@ class RNNTPipeline:
             return
         
         if self.target.accelerator == Accelerator.NPU:
-            self.model.release()
+            self.model[0].release()
+            self.model[1].release()

@@ -66,7 +66,7 @@ MODEL_RESOURCES = {
     ),
     Model.RNNT: ModelResources(
         model_folder_path="src/data/models/rnnt",
-        labels_path=None,
+        labels_path="src/data/labels/rnnt_tokens.txt",
         dataset=Dataset.LIBRISPEECH,
         dataset_folder_path="src/data/datasets/librispeech"
     )
