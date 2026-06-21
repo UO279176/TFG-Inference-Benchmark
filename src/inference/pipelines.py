@@ -3,6 +3,7 @@ from typing import Any, cast
 from datetime import datetime
 import ctypes
 import os
+import tempfile
 
 import numpy as np
 import json
@@ -754,7 +755,7 @@ class RNNTPipeline:
         nemo_files = sorted(self.model_folder_path.glob("*.nemo"))
         if not nemo_files:
             raise FileNotFoundError(
-                f"No se encontró ningún archivo .nemo en: {self.model_folder_path}"
+                f"No se encontró ningún modelo en: {self.model_folder_path}"
             )
         return nemo_files[0]
 
@@ -785,8 +786,15 @@ class RNNTPipeline:
             if self.target.accelerator == Accelerator.CPU:
                 os.environ["CUDA_VISIBLE_DEVICES"] = ""
                 os.environ["NVIDIA_VISIBLE_DEVICES"] = "void"
+                
+            custom_tmp_dir = self.model_folder_path / "nemo_tmp_cache"
+            custom_tmp_dir.mkdir(parents=True, exist_ok=True)
+            
+            os.environ["TMPDIR"] = str(custom_tmp_dir)
+            tempfile.tempdir = str(custom_tmp_dir)
 
             model_path = self._resolve_model_path()
+            print("Iniciando restore_from de NeMo...")
             loaded_model: Any = ASRModel.restore_from(
                 restore_path=str(model_path),
                 map_location=self.target.device,
@@ -875,21 +883,41 @@ class RNNTPipeline:
         if not sample.audio_path.exists():
             raise FileNotFoundError(f"No se encontró el audio en la ruta: {sample.audio_path}")
 
+        # Cargar el audio original
+        waveform, sr = torchaudio.load(str(sample.audio_path))
+        if sr != 16000:
+            waveform = torchaudio.functional.resample(waveform, orig_freq=sr, new_freq=16000)
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+
+        # Recortar exactamente 1 segundo (saltando los primeros 0.4s de silencio)
+        # 16000 muestras por segundo. 0.4s = 6400 muestras
+        start_sample = int(0.4 * 16000) if waveform.shape[1] > int(1.4 * 16000) else 0
+        target_samples = 16000  # 1 segundo exacto
+        
+        cropped_waveform = waveform[:, start_sample:start_sample + target_samples]
+        
+        # Rellenar con ceros si el audio original era demasiado corto
+        if cropped_waveform.shape[1] < target_samples:
+            pad_amount = target_samples - cropped_waveform.shape[1]
+            cropped_waveform = torch.nn.functional.pad(cropped_waveform, (0, pad_amount))
+
+        # Guardar en un archivo temporal
+        temp_audio_path = Path(tempfile.gettempdir()) / "benchmark_1sec.wav"
+        torchaudio.save(str(temp_audio_path), cropped_waveform, 16000)
+
         model_inputs = {
-            "audio_path": str(sample.audio_path),
+            "audio_path": str(temp_audio_path),
             "reference": sample.reference,
         }
 
         if self.target.accelerator == Accelerator.NPU:
-            features = self._extract_mel_spectrogram(str(sample.audio_path))
+            features = self._extract_mel_spectrogram(str(temp_audio_path))
             
             target_frames = 100
             current_frames = features.shape[2]
             
-            # Evadir el silencio inicial
-            start_frame = 40 if current_frames > 140 else 0
-            
-            features = features[:, :, start_frame:start_frame + target_frames]
+            features = features[:, :, :target_frames]
             current_frames = features.shape[2]
             
             if current_frames < target_frames:
@@ -925,7 +953,6 @@ class RNNTPipeline:
             with torch.inference_mode():
                 raw_transcription = model.transcribe(
                     audio=[model_inputs["audio_path"]],
-                    use_lhotse=False,
                     batch_size=1,
                 )
             
