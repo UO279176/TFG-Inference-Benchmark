@@ -58,10 +58,11 @@ class Metrics:
     # Promedio de uso de CPU
     @classmethod
     def average_cpu_usage(cls) -> float:
-        if len(cls.cpu_usage) == 0:
+        # La primera muestra siempre es 0.0, por lo que no se considera en el promedio
+        if len(cls.cpu_usage) <= 1:
             return 0.0
         else:
-            return sum(cls.cpu_usage) / len(cls.cpu_usage)
+            return sum(cls.cpu_usage[1:]) / (len(cls.cpu_usage) - 1)
 
     # Uso máximo de CPU
     @classmethod
@@ -136,7 +137,7 @@ class Metrics:
     
     @classmethod
     def sample_system_metrics(cls):
-        cpu_percent = psutil.cpu_percent(interval=0.1)
+        cpu_percent = psutil.cpu_percent(interval=None)
         ram_used_mib = psutil.virtual_memory().used / (1024 * 1024)
         
         # Cálculo del porcentaje de uso del disco basado en el tiempo ocupado del disco
@@ -167,7 +168,7 @@ class Metrics:
                         disk_percentages.append((disk_time_delta_ms / (elapsed_seconds * 1000.0)) * 100.0)
 
                 if len(disk_percentages) > 0:
-                    disk_percent = max(disk_percentages)
+                    disk_percent = min(max(disk_percentages), 100.0)
 
         cls.last_disk_io = current_disk_io
         cls.last_disk_sample_time = current_time
