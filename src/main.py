@@ -1,6 +1,7 @@
 import sys
 from dataclasses import replace
 from pathlib import Path
+import traceback
 
 import torch
 
@@ -82,6 +83,8 @@ if __name__ == "__main__":
         runner.run_preview(max_samples=5, top_k=5)
 
         print("Inferencia completada exitosamente")
+        
     except Exception as e:
         print(f"Error en la ejecución de inferencia: {e}")
+        traceback.print_exc()
         sys.exit(1)

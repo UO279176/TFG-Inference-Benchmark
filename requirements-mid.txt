@@ -1,0 +1,11 @@
+# Para Python 3.9
+transformers==4.53.0 # Para ejecución de modelos
+tensorflow # Para ejecución de modelos
+sentencepiece==0.2.1 # Para el tokenizador de TinyLlama
+diffusers==0.36.0 # Para el pipeline de Stable Diffusion
+accelerate==1.10.1 # Mejora de carga de modelo para Stable Diffusion
+pyarrow==18.1.0 # Lectura de dataset LibriSpeech (.parquet)
+nemo_toolkit[asr] # Para el pipeline de RNNT (.nemo)
+psutil==7.2.2 # Para la recopilación de métricas
+torchaudio # Para la extracción de características de audio de RNNT
+torchcodec # Para la decodificación de audio de RNNT

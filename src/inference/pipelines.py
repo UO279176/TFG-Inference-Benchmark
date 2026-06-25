@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import faulthandler
 faulthandler.enable()
 
@@ -16,11 +18,16 @@ from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import Stabl
 from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizerFast, CLIPTokenizer
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
-from nemo.collections.asr.models import ASRModel
 from diffusers.schedulers import LCMScheduler
 
 from inference.contracts import AudioSample, ImageSample, TextSample
 from data import ExecutionTarget, Accelerator
+
+try:
+    from nemo.collections.asr.models import ASRModel
+except ImportError:
+    ASRModel = None
+    print("Advertencia: nemo_toolkit no está instalado o no es compatible con la versión de Python. Los modelos NeMo para CPU/GPU no funcionarán.")
 
 try:
     from rknnlite.api import RKNNLite
@@ -95,10 +102,11 @@ class ResNet50Pipeline:
             delegate = load_delegate("libedgetpu.so.1")
             
             self.model = Interpreter(
-                model_path=str(self.model_folder_path / "resnet50_edgetpu.tflite"),
+                model_path=str(self.model_folder_path / "tfhub_tf2_resnet_50_imagenet_ptq_edgetpu.tflite"),
                 experimental_delegates=[delegate]
             )
             self.model.allocate_tensors()
+   
         else:
             raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
         
@@ -117,9 +125,10 @@ class ResNet50Pipeline:
         normalized = (image_array / 255.0 - self.mean.numpy().transpose(1, 2, 0)) / self.std.numpy().transpose(1, 2, 0)
         return np.ascontiguousarray(normalized[None, ...])
 
-    def _image_to_int8(self, sample: ImageSample) -> np.ndarray:
+    def _image_to_tpu(self, sample: ImageSample) -> np.ndarray:
         resized = sample.image.resize((self.image_size, self.image_size))
-        input_data = np.expand_dims(np.array(resized, dtype=np.uint8), axis=0)
+        image_array = np.array(resized, dtype=np.uint8)
+        input_data = np.expand_dims(image_array, axis=0)
         return input_data
 
     def preprocess(self, sample: ImageSample) -> dict[str, Any]:
@@ -133,7 +142,7 @@ class ResNet50Pipeline:
         elif self.target.accelerator == Accelerator.NPU:
             pixel_values = self._image_to_numpy(sample)
         elif self.target.accelerator == Accelerator.TPU:
-            pixel_values = self._image_to_int8(sample)
+            pixel_values = self._image_to_tpu(sample)
         else:
             raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
 
@@ -169,6 +178,15 @@ class ResNet50Pipeline:
             self.model.set_tensor(input_details[0]['index'], model_inputs["pixel_values"])
             self.model.invoke()
             output_data = self.model.get_tensor(output_details[0]['index'])
+            
+            scale, zero_point = output_details[0]['quantization']
+            
+            # Convertir a float32 y aplicar la fórmula de decuantización
+            # Fórmula: real_value = (quantized_value - zero_point) * scale
+            if scale > 0:
+                output_data = (output_data.astype(np.float32) - zero_point) * scale
+            else:
+                output_data = output_data.astype(np.float32)
 
             return torch.from_numpy(output_data)
         
@@ -177,7 +195,14 @@ class ResNet50Pipeline:
 
     def decode(self, logits: torch.Tensor, top_k: int = 5) -> list[tuple[int, float, str]]:
         print("Decodificando resultados de inferencia")
-        probabilities = torch.softmax(logits[0], dim=-1)
+        
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU or self.target.accelerator == Accelerator.NPU:
+            probabilities = torch.softmax(logits[0], dim=-1)
+        elif self.target.accelerator == Accelerator.TPU:
+            probabilities = logits[0]
+        else:
+            raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
+        
         scores, indices = torch.topk(probabilities, k=top_k)
 
         predictions: list[tuple[int, float, str]] = []
