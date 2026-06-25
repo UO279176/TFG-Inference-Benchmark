@@ -1,3 +1,6 @@
+import faulthandler
+faulthandler.enable()
+
 from pathlib import Path
 from typing import Any, cast
 from datetime import datetime
@@ -14,14 +17,28 @@ from transformers import AutoModelForImageClassification, AutoModelForCausalLM, 
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
 from nemo.collections.asr.models import ASRModel
-from rknnlite.api import RKNNLite
 from diffusers.schedulers import LCMScheduler
 
 from inference.contracts import AudioSample, ImageSample, TextSample
 from data import ExecutionTarget, Accelerator
-from inference.rkllm_tl_lib.rkllm import RKLLM
-from inference.rkllm_tl_lib.variables import global_text
-from inference.rknn_sd_lib.rknn_sd import RKNN2LatentConsistencyPipeline, RKNN2Model
+
+try:
+    from rknnlite.api import RKNNLite
+    from inference.rkllm_tl_lib.rkllm import RKLLM
+    from inference.rkllm_tl_lib.variables import global_text
+    from inference.rknn_sd_lib.rknn_sd import RKNN2LatentConsistencyPipeline, RKNN2Model
+except ImportError:
+    RKNNLite = None
+    RKLLM = None
+    RKNN2LatentConsistencyPipeline = None
+    RKNN2Model = None
+    print("Advertencia: rknnlite y/o la librería no están instaladas. Los modelos RKNN y/o RKLLM para NPU no funcionarán.")
+    
+try:
+    from tflite_runtime.interpreter import load_delegate, Interpreter
+except ImportError:
+    tflite = None
+    print("Advertencia: tflite_runtime no está instalado. Los modelos TFLite para TPU no funcionarán.")
 
 # Silencia los logs de UNEXPECTED keys
 hf_logging.set_verbosity_error()
@@ -74,6 +91,14 @@ class ResNet50Pipeline:
             if ret != 0:
                 raise RuntimeError(f"Error al inicializar el runtime RKNN: código de error {ret}")
             
+        elif self.target.accelerator == Accelerator.TPU:
+            delegate = load_delegate("libedgetpu.so.1")
+            
+            self.model = Interpreter(
+                model_path=str(self.model_folder_path / "resnet50_edgetpu.tflite"),
+                experimental_delegates=[delegate]
+            )
+            self.model.allocate_tensors()
         else:
             raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
         
@@ -92,6 +117,11 @@ class ResNet50Pipeline:
         normalized = (image_array / 255.0 - self.mean.numpy().transpose(1, 2, 0)) / self.std.numpy().transpose(1, 2, 0)
         return np.ascontiguousarray(normalized[None, ...])
 
+    def _image_to_int8(self, sample: ImageSample) -> np.ndarray:
+        resized = sample.image.resize((self.image_size, self.image_size))
+        input_data = np.expand_dims(np.array(resized, dtype=np.uint8), axis=0)
+        return input_data
+
     def preprocess(self, sample: ImageSample) -> dict[str, Any]:
         print(f"Preprocesando muestra: {sample.path}")
         if self.model is None:
@@ -102,6 +132,8 @@ class ResNet50Pipeline:
             pixel_values = self._image_to_tensor(sample).unsqueeze(0).to(self.target.device)
         elif self.target.accelerator == Accelerator.NPU:
             pixel_values = self._image_to_numpy(sample)
+        elif self.target.accelerator == Accelerator.TPU:
+            pixel_values = self._image_to_int8(sample)
         else:
             raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
 
@@ -129,6 +161,16 @@ class ResNet50Pipeline:
                 return torch.from_numpy(raw_output)
 
             return torch.as_tensor(raw_output)
+
+        elif self.target.accelerator == Accelerator.TPU:
+            input_details = self.model.get_input_details()
+            output_details = self.model.get_output_details()
+
+            self.model.set_tensor(input_details[0]['index'], model_inputs["pixel_values"])
+            self.model.invoke()
+            output_data = self.model.get_tensor(output_details[0]['index'])
+
+            return torch.from_numpy(output_data)
         
         else:
             raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")

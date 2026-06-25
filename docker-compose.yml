@@ -1,0 +1,17 @@
+services:
+  benchmark:
+    build:
+      context: .
+      dockerfile: ${DOCKERFILE}
+    image: tfg-inference-benchmark
+    privileged: true
+    stdin_open: true
+    tty: true
+    restart: always
+    
+    volumes:
+      - ./src/data:/app/src/data
+      - ./results:/app/results
+      - /dev/bus/usb:/dev/bus/usb
+    
+    command: ["${ACELERADOR}", "${MODELO}"]

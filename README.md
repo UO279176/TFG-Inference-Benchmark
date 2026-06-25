@@ -20,6 +20,9 @@ Para preparar el entorno de ejecución se utilizará Docker y se deben seguir lo
 ```docker run -it --rm --privileged --device=/dev/dri/renderD128:/dev/dri/renderD128 -v ./src/data:/app/src/data -v ./results:/app/results -v ./src/data/libs/librknnrt_230.so:/usr/lib/librknnrt.so -v ./src/data/libs/librkllmrt.so:/usr/lib/librkllmrt.so -v /dev/dri/renderD128:/dev/dri/renderD128 -v /proc/device-tree/compatible:/proc/device-tree/compatible tfg-inference-benchmark <acelerador> <modelo>```
 - Si se va a usar NPU con RKNN v2.3.2:
 ```docker run -it --rm --privileged --device=/dev/dri/renderD128:/dev/dri/renderD128 -v ./src/data:/app/src/data -v ./results:/app/results -v ./src/data/libs/librknnrt_232.so:/usr/lib/librknnrt.so -v ./src/data/libs/librkllmrt.so:/usr/lib/librkllmrt.so -v /dev/dri/renderD128:/dev/dri/renderD128 -v /proc/device-tree/compatible:/proc/device-tree/compatible tfg-inference-benchmark <acelerador> <modelo>```
+- Si se va a usar TPU:
+```docker run -it --rm --privileged -v ./src/data:/app/src/data -v ./results:/app/results -v /dev/bus/usb:/dev/bus/usb tfg-inference-benchmark <acelerador> <modelo>```
+
 Ejecutar el contenedor sin parámetros mostrará la ayuda con las opciones disponibles.
 
 ### Notas adicionales

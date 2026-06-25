@@ -25,6 +25,10 @@ def resolve_execution_target(accelerator_identifier: Accelerator) -> ExecutionTa
     if accelerator_identifier == Accelerator.NPU:
         print("Ejecutando en NPU")
         return ExecutionTarget(accelerator=accelerator_identifier, device=None)
+    
+    if accelerator_identifier == Accelerator.TPU:
+        print("Ejecutando en TPU")
+        return ExecutionTarget(accelerator=accelerator_identifier, device=None)
 
     raise NotImplementedError(f"Acelerador no soportado por el runner actual: {accelerator_identifier.value}")
 
@@ -43,6 +47,13 @@ if __name__ == "__main__":
         resources = replace(
             resources,
             model_folder_path=resources.model_folder_path.replace("src/data/models", "src/data/models/npu"),
+        )
+    
+    # Ajuste de la ruta del modelo para TPU
+    if accelerator_identifier == Accelerator.TPU:
+        resources = replace(
+            resources,
+            model_folder_path=resources.model_folder_path.replace("src/data/models", "src/data/models/tpu"),
         )
 
     print(f"Nombre: {model_identifier.value}")
