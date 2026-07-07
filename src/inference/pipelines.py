@@ -277,6 +277,15 @@ class RetinaNetPipeline:
             if ret != 0:
                 raise RuntimeError(f"Error al inicializar el runtime RKNN: código de error {ret}")
             
+        elif self.target.accelerator == Accelerator.TPU:
+            delegate = load_delegate("libedgetpu.so.1")
+            
+            self.model = Interpreter(
+                model_path=str(self.model_folder_path / "retinanet_edgetpu.tflite"),
+                experimental_delegates=[delegate]
+            )
+            self.model.allocate_tensors()
+            
         else:
             raise RuntimeError(f"Acelerador no soportado para RetinaNet: {self.target.accelerator}")
 
@@ -291,6 +300,12 @@ class RetinaNetPipeline:
         image_array = image_array * self.std + self.mean
         image_array = np.transpose(image_array, (2, 0, 1)) # Cambiamos de HWC a CHW
         return np.ascontiguousarray(image_array[None, ...])
+    
+    def _image_to_tpu(self, sample: ImageSample) -> np.ndarray:
+        resized = sample.image.resize((self.image_size, self.image_size))
+        image_array = np.array(resized, dtype=np.uint8)
+        input_data = np.expand_dims(image_array, axis=0)
+        return input_data
 
     def preprocess(self, sample: ImageSample) -> dict[str, Any]:
         print(f"Preprocesando muestra: {sample.path}")
@@ -303,6 +318,8 @@ class RetinaNetPipeline:
             batch = tf.expand_dims(tensor, axis=0)
         elif self.target.accelerator == Accelerator.NPU:
             batch = self._image_to_numpy(sample)
+        elif self.target.accelerator == Accelerator.TPU:
+            batch = self._image_to_tpu(sample)
         else:
             raise RuntimeError(f"Acelerador no soportado para RetinaNet: {self.target.accelerator}")
             
@@ -324,6 +341,25 @@ class RetinaNetPipeline:
             if not rknn_outputs:
                 raise RuntimeError("RKNN no devolvió salidas")
             return rknn_outputs
+        
+        elif self.target.accelerator == Accelerator.TPU:
+            input_details = self.model.get_input_details()
+            output_details = self.model.get_output_details()
+
+            self.model.set_tensor(input_details[0]['index'], model_inputs["input_tensor"])
+            self.model.invoke()
+            output_data = self.model.get_tensor(output_details[0]['index'])
+            
+            scale, zero_point = output_details[0]['quantization']
+            
+            # Convertir a float32 y aplicar la fórmula de decuantización
+            # Fórmula: real_value = (quantized_value - zero_point) * scale
+            if scale > 0:
+                output_data = (output_data.astype(np.float32) - zero_point) * scale
+            else:
+                output_data = output_data.astype(np.float32)
+
+            return torch.from_numpy(output_data)
         
         else:
             raise RuntimeError(f"Acelerador no soportado para RetinaNet: {self.target.accelerator}")

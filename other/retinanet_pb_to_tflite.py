@@ -18,7 +18,7 @@ print("Static input shape:", model.input.shape)
 
 def representative_dataset():
     for _ in range(100):
-        data = np.random.rand(1, 800, 800, 3)
+        data = np.random.rand(1, 800, 800, 3) * 255.0
         yield [data.astype(np.float32)]
 
 """
