@@ -14,18 +14,24 @@ import numpy as np
 import json
 import torch
 import torchaudio
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline
 from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizerFast, CLIPTokenizer
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
-from diffusers.schedulers import LCMScheduler
 
 from inference.contracts import AudioSample, ImageSample, TextSample
 from data import ExecutionTarget, Accelerator
 
 try:
+    from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline
+    from diffusers.schedulers import LCMScheduler
+except Exception:
+    StableDiffusionPipeline = None
+    LCMScheduler = None
+    print("Advertencia: diffusers no está instalado o no es compatible con la versión de Python. Los modelos de Stable Diffusion para CPU/GPU/NPU no funcionarán.")
+
+try:
     from nemo.collections.asr.models import ASRModel
-except ImportError:
+except Exception:
     ASRModel = None
     print("Advertencia: nemo_toolkit no está instalado o no es compatible con la versión de Python. Los modelos NeMo para CPU/GPU no funcionarán.")
 
@@ -34,7 +40,7 @@ try:
     from inference.rkllm_tl_lib.rkllm import RKLLM
     from inference.rkllm_tl_lib.variables import global_text
     from inference.rknn_sd_lib.rknn_sd import RKNN2LatentConsistencyPipeline, RKNN2Model
-except ImportError:
+except Exception:
     RKNNLite = None
     RKLLM = None
     RKNN2LatentConsistencyPipeline = None
@@ -42,9 +48,9 @@ except ImportError:
     print("Advertencia: rknnlite y/o la librería no están instaladas. Los modelos RKNN y/o RKLLM para NPU no funcionarán.")
     
 try:
+    from inference.coral_sd_lib.tpu_stable_diffusion import StableDiffusionTFLite
     from tflite_runtime.interpreter import load_delegate, Interpreter
-except ImportError:
-    tflite = None
+except Exception:
     print("Advertencia: tflite_runtime no está instalado. Los modelos TFLite para TPU no funcionarán.")
 
 # Silencia los logs de UNEXPECTED keys
@@ -715,6 +721,16 @@ class StableDiffusion15Pipeline:
                 tokenizer=CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch16"),
             )
         
+        elif self.target.accelerator == Accelerator.TPU:
+            self.model = StableDiffusionTFLite(
+                self.width,
+                self.height,
+                self.model_folder_path
+            )
+        
+        else:
+            raise ValueError(f"Acelerador no soportado: {self.target.accelerator}")
+        
         print("Modelo cargado exitosamente")
 
     def preprocess(self, sample: TextSample) -> dict[str, object]:
@@ -740,6 +756,15 @@ class StableDiffusion15Pipeline:
                 "prompt": sample.prompt,
                 "generator": generator,
             }
+            
+        elif self.target.accelerator == Accelerator.TPU:
+            return {
+                "sample_path": sample.path,
+                "prompt": sample.prompt,
+            }
+            
+        else:
+            raise ValueError(f"Acelerador no soportado: {self.target.accelerator}")
 
     def predict(self, model_inputs: dict[str, object]) -> dict[str, object]:
         print("Ejecutando inferencia en el modelo")
@@ -785,6 +810,25 @@ class StableDiffusion15Pipeline:
                 "prompt": prompt,
                 "image": image,
             }
+        
+        elif self.target.accelerator == Accelerator.TPU:
+            encoded_prompt = self.model.encode_text(model_inputs["prompt"])
+            image = self.model.generate_image(
+                encoded_text=encoded_prompt,
+                batch_size=1,
+                num_steps=self.num_inference_steps,
+                unconditional_guidance_scale=self.guidance_scale,
+                seed=self.seed,
+            )
+            
+            return {
+                "sample_path": model_inputs["sample_path"],
+                "prompt": model_inputs["prompt"],
+                "image": image,
+            }
+            
+        else:
+            raise ValueError(f"Acelerador no soportado: {self.target.accelerator}")
 
     def decode(self, logits: dict[str, object], top_k: int = 5) -> list[dict[str, object]]:
         print("Decodificando resultados de inferencia")

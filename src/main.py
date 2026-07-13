@@ -80,7 +80,7 @@ if __name__ == "__main__":
             model_identifier=model_identifier,
             accelerator_identifier=execution_target.accelerator
         )
-        runner.run_preview(max_samples=5, top_k=5)
+        runner.run_preview(max_samples=1, top_k=5)
 
         print("Inferencia completada exitosamente")
         

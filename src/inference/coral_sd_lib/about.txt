@@ -1,0 +1,1 @@
+Librería para ejecutar Stable Diffusion con la TPU Coral USB Accelerator, modificada a partir de https://github.com/freedomtan/keras_cv_stable_diffusion_to_tflite/blob/main/text_to_image_using_converted_tflite_models.ipynb, por freedomtan

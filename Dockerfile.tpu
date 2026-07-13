@@ -24,6 +24,7 @@ RUN pip3 install --no-cache-dir --extra-index-url https://google-coral.github.io
 RUN pip3 install --no-cache-dir "numpy<2"
 RUN pip3 install --no-cache-dir Cython
 RUN pip3 install --no-cache-dir texterrors
+RUN pip3 install --no-cache-dir keras==2.12.0
 
 WORKDIR /app
 COPY requirements-mid.txt ./requirements.txt
