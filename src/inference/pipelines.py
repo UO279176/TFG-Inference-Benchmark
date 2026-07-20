@@ -721,12 +721,12 @@ class StableDiffusion15Pipeline:
                 tokenizer=CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch16"),
             )
         
-        elif self.target.accelerator == Accelerator.TPU:
-            self.model = StableDiffusionTFLite(
-                self.width,
-                self.height,
-                self.model_folder_path
-            )
+        # elif self.target.accelerator == Accelerator.TPU:
+        #     self.model = StableDiffusionTFLite(
+        #         self.width,
+        #         self.height,
+        #         self.model_folder_path
+        #     )
         
         else:
             raise ValueError(f"Acelerador no soportado: {self.target.accelerator}")

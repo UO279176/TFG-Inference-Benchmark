@@ -42,6 +42,13 @@ class StableDiffusionTFLite:
             model_path=str(self.base_model_path / "diffusion_model_second_qint8_modded_edgetpu.tflite"),
             experimental_delegates=[delegate]
         )
+        self.diffusion_model_first.allocate_tensors()
+        self.diffusion_model_second.allocate_tensors()
+        self.text_encoder_output_details = self.text_encoder.get_output_details()
+        self.diffusion_model_first_input_details = self.diffusion_model_first.get_input_details()
+        self.diffusion_model_first_output_details = self.diffusion_model_first.get_output_details()
+        self.diffusion_model_second_input_details = self.diffusion_model_second.get_input_details()
+        self.diffusion_model_second_output_details = self.diffusion_model_second.get_output_details()
         
         self.tokenizer = SimpleTokenizer()
 
@@ -133,66 +140,59 @@ class StableDiffusionTFLite:
             if a['name'] == name:
                 return a['index']
 
-    def diffusion_model(self, latent, t_emb, unconditional_context):
-        input_names = [
-            "serving_default_args_0:0",
-            "serving_default_args_0_1:0",
-            "serving_default_args_0_2:0",
-            "serving_default_args_0_3:0",
-            "serving_default_args_0_4:0",
-            "serving_default_args_0_5:0",
-            "serving_default_args_0_6:0",
-            "serving_default_args_0_7:0",
-            "serving_default_args_0_8:0",
-            "serving_default_args_0_9:0",
-            "serving_default_args_0_10:0",
-            "serving_default_args_0_11:0",
-            "serving_default_args_0_12:0",
-        ]
-        
-        output_names = [
-            "StatefulPartitionedCall:6",
-            "StatefulPartitionedCall:4",
-            "StatefulPartitionedCall:0",
-            "StatefulPartitionedCall:12",
-            "serving_default_input_1:0",
-            "StatefulPartitionedCall:11",
-            "StatefulPartitionedCall:3",
-            "StatefulPartitionedCall:10",
-            "StatefulPartitionedCall:9",
-            "StatefulPartitionedCall:5",
-            "StatefulPartitionedCall:8",
-            "StatefulPartitionedCall:7",
-            "StatefulPartitionedCall:2",
-        ]
+    def _dequantize_tensor(self, tensor, tensor_detail):
+        tensor_array = np.asarray(tensor)
+        scale, zero_point = tensor_detail["quantization"]
+        if scale > 0:
+            return (tensor_array.astype(np.float32) - zero_point) * scale
+        return tensor_array.astype(np.float32)
 
-        first_input_details = self.diffusion_model_first.get_input_details()
-        first_output_details = self.diffusion_model_first.get_output_details()
-        
-        self.diffusion_model_first.resize_tensor_input(first_input_details[0]['index'], unconditional_context.shape)
-        self.diffusion_model_first.resize_tensor_input(first_input_details[1]['index'], latent.shape)
-        self.diffusion_model_first.resize_tensor_input(first_input_details[2]['index'], t_emb.shape)
-        self.diffusion_model_first.allocate_tensors()        
-        self.diffusion_model_first.set_tensor(first_input_details[0]['index'], unconditional_context)
-        self.diffusion_model_first.set_tensor(first_input_details[1]['index'], latent)
-        self.diffusion_model_first.set_tensor(first_input_details[2]['index'], t_emb)
+    def _quantize_tensor(self, tensor, tensor_detail):
+        tensor_array = np.asarray(tensor, dtype=np.float32)
+        scale, zero_point = tensor_detail["quantization"]
+        dtype = tensor_detail["dtype"]
+
+        if scale > 0:
+            tensor_array = np.round(tensor_array / scale + zero_point)
+
+        if np.issubdtype(dtype, np.integer):
+            info = np.iinfo(dtype)
+            tensor_array = np.clip(tensor_array, info.min, info.max)
+
+        return tensor_array.astype(dtype)
+
+    def _requantize_tensor(self, tensor, source_detail, target_detail):
+        return self._quantize_tensor(self._dequantize_tensor(tensor, source_detail), target_detail)
+
+    def diffusion_model(self, latent, t_emb, unconditional_context):
+        first_input_details = self.diffusion_model_first_input_details
+        first_output_details = self.diffusion_model_first_output_details
+
+        latent_q = self._quantize_tensor(latent, first_input_details[0])
+        t_emb_q = self._quantize_tensor(t_emb, first_input_details[1])
+        context_q = self._requantize_tensor(
+            unconditional_context,
+            self.text_encoder_output_details[0],
+            first_input_details[2],
+        )
+
+        self.diffusion_model_first.set_tensor(first_input_details[0]['index'], latent_q)
+        self.diffusion_model_first.set_tensor(first_input_details[1]['index'], t_emb_q)
+        self.diffusion_model_first.set_tensor(first_input_details[2]['index'], context_q)
 
         self.diffusion_model_first.invoke()
 
-        second_input_details = self.diffusion_model_second.get_input_details()
-        second_output_details = self.diffusion_model_second.get_output_details()        
+        second_input_details = self.diffusion_model_second_input_details
+        second_output_details = self.diffusion_model_second_output_details        
 
         for i in range(13):
-            self.diffusion_model_second.resize_tensor_input(
-                self.get_index_of_name(second_input_details, input_names[i]),
-                self.diffusion_model_first.get_tensor(self.get_index_of_name(first_output_details, output_names[i])).shape)
-
-        self.diffusion_model_second.allocate_tensors()
-
-        for i in range(13):
+            first_output_detail = first_output_details[i]
+            second_input_detail = second_input_details[i]
+            first_output_tensor = self.diffusion_model_first.get_tensor(first_output_detail['index'])
             self.diffusion_model_second.set_tensor(
-                self.get_index_of_name(second_input_details, input_names[i]),
-                self.diffusion_model_first.get_tensor(self.get_index_of_name(first_output_details, output_names[i])))
+                second_input_detail['index'],
+                self._requantize_tensor(first_output_tensor, first_output_detail, second_input_detail)
+            )
 
         self.diffusion_model_second.invoke()
         output_data = self.diffusion_model_second.get_tensor(second_output_details[0]['index'])
