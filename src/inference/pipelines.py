@@ -965,6 +965,23 @@ class RNNTPipeline:
             ret = self.model[1].init_runtime()
             if ret != 0: raise RuntimeError(f"Error inicializando Decoder/Joint: {ret}")
             
+        # elif self.target.accelerator == Accelerator.TPU:
+        #     delegate = load_delegate("libedgetpu.so.1")
+            
+        #     self.model = [
+        #         Interpreter(
+        #             model_path=str(self.model_folder_path / "rnnt_encoder_edgetpu.tflite"),
+        #             experimental_delegates=[delegate]
+        #         ),
+        #         Interpreter(
+        #             model_path=str(self.model_folder_path / "rnnt_decoder_joint_edgetpu.tflite"),
+        #             experimental_delegates=[delegate]
+        #         )
+        #     ]
+            
+        #     self.model[0].allocate_tensors()
+        #     self.model[1].allocate_tensors()
+            
         else:
             raise RuntimeError(f"Acelerador no soportado para RNNT: {self.target.accelerator}")
         
