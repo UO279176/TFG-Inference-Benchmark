@@ -503,6 +503,7 @@ class TinyLlamaPipeline:
         self.tokenizer: Any = None
         self.max_input_chars = 4000
         self.max_output_tokens = 50
+        self.tpu_sequence_length = 128
 
     def load(self) -> None:
         print(f"Cargando modelo desde: {self.model_folder_path}")
@@ -536,6 +537,29 @@ class TinyLlamaPipeline:
                 max_context_len=self.max_input_chars,
                 max_new_tokens=self.max_output_tokens
             )
+            
+        elif self.target.accelerator == Accelerator.TPU:
+            # Tokenizer
+            try:
+                self.tokenizer = LlamaTokenizerFast.from_pretrained(
+                    str(self.model_folder_path),
+                    local_files_only=True
+                )
+            except Exception as tokenizer_error:
+                raise RuntimeError(f"Error al cargar el tokenizer de TinyLlama: {tokenizer_error}")
+
+            # Configurar pad token si no existe
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+            
+            # Modelo
+            delegate = load_delegate("libedgetpu.so.1")
+            
+            self.model = Interpreter(
+                model_path=str(self.model_folder_path / "tinyllama.tflite"),
+                experimental_delegates=[delegate],
+            )
+            self.model.allocate_tensors()
         
         else:
             raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
@@ -565,11 +589,65 @@ class TinyLlamaPipeline:
             return {
                 "prompt": prompt
             }
+        
+        elif self.target.accelerator == Accelerator.TPU:
+            tokenizer = self.tokenizer
+            if tokenizer is None:
+                raise RuntimeError("El modelo todavía no está cargado")
+
+            prompt_text = sample.prompt[:self.max_input_chars]
+            prompt = f"Summarize the following news article:\n\n{prompt_text}"
+            max_prompt_tokens = self.tpu_sequence_length - self.max_output_tokens
+            tokenized_inputs = tokenizer(
+                prompt,
+                return_tensors="np",
+                truncation=True,
+                max_length=max_prompt_tokens,
+                padding="max_length",
+            )
+            input_ids = np.asarray(tokenized_inputs["input_ids"])
+            attention_mask = np.asarray(tokenized_inputs["attention_mask"])
+            input_length = int(np.sum(attention_mask[0]))
+            if input_length == 0:
+                raise RuntimeError("El tokenizer produjo una entrada vacía")
+
+            return {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "input_length": input_length,
+            }
             
         else:
             raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
 
-    def predict(self, model_inputs: dict[str, Any]) -> dict[str, torch.Tensor]:
+    def _tpu_input_value(self, values: np.ndarray, detail: dict[str, Any]) -> np.ndarray:
+        dtype = np.dtype(detail["dtype"])
+        scale, zero_point = detail.get("quantization", (0.0, 0))
+        if np.issubdtype(dtype, np.integer) and scale:
+            values = np.rint(values.astype(np.float32) / scale + zero_point)
+            info = np.iinfo(dtype)
+            values = np.clip(values, info.min, info.max)
+        return np.asarray(values, dtype=dtype)
+
+    def _tpu_inputs(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> list[np.ndarray]:
+        if self.model is None:
+            raise RuntimeError("El modelo todavía no está cargado")
+
+        values = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+        input_details = self.model.get_input_details()
+        inputs = []
+        for position, detail in enumerate(input_details):
+            name = str(detail.get("name", "")).lower()
+            key = "attention_mask" if "attention" in name or "mask" in name else "input_ids"
+            if position == 1 and key == "input_ids" and len(input_details) == 2:
+                key = "attention_mask"
+            inputs.append(self._tpu_input_value(values[key], detail))
+        return inputs
+
+    def predict(self, model_inputs: dict[str, Any]) -> dict[str, Any]:
         print("Ejecutando inferencia en el modelo")
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
             model = self.model # Guardamos en variable local para evitar problemas de acceso
@@ -607,13 +685,56 @@ class TinyLlamaPipeline:
             return {
                 "output_text": "".join(global_text)
             }
+        
+        elif self.target.accelerator == Accelerator.TPU:
+            if self.model is None:
+                raise RuntimeError("El modelo todavía no está cargado")
+
+            input_ids = np.asarray(model_inputs["input_ids"])[0].copy()
+            attention_mask = np.asarray(model_inputs["attention_mask"])[0].copy()
+            input_length = int(model_inputs["input_length"])
+            generated_ids = input_ids[:input_length].tolist()
+            eos_token_id = getattr(self.tokenizer, "eos_token_id", None)
+            pad_token_id = getattr(self.tokenizer, "pad_token_id", None)
+            if pad_token_id is None:
+                pad_token_id = eos_token_id if eos_token_id is not None else 0
+            output_detail = self.model.get_output_details()[0]
+
+            for _ in range(self.max_output_tokens):
+                model_input_ids = np.full(
+                    (1, self.tpu_sequence_length), pad_token_id, dtype=np.int64
+                )
+                model_attention_mask = np.zeros((1, self.tpu_sequence_length), dtype=np.int64)
+                model_input_ids[0, :len(generated_ids)] = generated_ids
+                model_attention_mask[0, :len(generated_ids)] = 1
+                tpu_inputs = self._tpu_inputs(model_input_ids, model_attention_mask)
+                for detail, value in zip(self.model.get_input_details(), tpu_inputs):
+                    self.model.set_tensor(detail["index"], value)
+                self.model.invoke()
+
+                logits = self.model.get_tensor(output_detail["index"])
+                scale, zero_point = output_detail.get("quantization", (0.0, 0))
+                if scale:
+                    logits = (np.asarray(logits).astype(np.float32) - zero_point) * scale
+                logits = np.asarray(logits)
+                next_token_logits = logits[0, len(generated_ids) - 1]
+
+                next_token_id = int(np.argmax(next_token_logits))
+                generated_ids.append(next_token_id)
+                if eos_token_id is not None and next_token_id == eos_token_id and len(generated_ids) - input_length >= 8:
+                    break
+                
+            return {
+                "output_ids": torch.tensor([generated_ids], dtype=torch.long),
+                "input_length": torch.tensor([input_length], dtype=torch.long),
+            }
             
         else:
             raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
 
     def decode(self, logits: dict[str, Any], top_k: int = 5) -> list[dict[str, object]]:
         print("Decodificando resultados de inferencia")
-        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU or self.target.accelerator == Accelerator.TPU:
             tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
             if tokenizer is None:
                 raise RuntimeError("El modelo todavía no está cargado")
@@ -630,8 +751,7 @@ class TinyLlamaPipeline:
             if continuation_text:
                 display_text = continuation_text
             else:
-                full_text = tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
-                display_text = full_text if full_text else "[sin texto generado]"
+                display_text = "[sin texto generado]"
 
             predictions: list[dict[str, object]] = [
                 {
