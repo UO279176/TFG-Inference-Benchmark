@@ -39,9 +39,11 @@ En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker
 ```pip3 install nvidia-cudss-cu12```
 ```pip3 install numpy```
 ```pip3 install -r requirements-cuda-new.txt```
-4. Configurar la variable de entorno LD_LIBRARY_PATH, sustituyendo `<ruta_venv>` por la ruta absoluta del entorno virtual creado:
+4. Desinstalar cublas para que no haya conflictos con la versión de cublas instalada en el sistema:
+```pip3 uninstall nvidia-cublas-cu12```
+5. Configurar la variable de entorno LD_LIBRARY_PATH, sustituyendo `<ruta_venv>` por la ruta absoluta del entorno virtual creado:
 ```export LD_LIBRARY_PATH="<ruta_venv>/lib/python3.10/site-packages/nvidia/cu12/lib/:$LD_LIBRARY_PATH"```
-5. Ejecutar el benchmark:
+6. Ejecutar el benchmark:
 ```python3 src/main.py <acelerador> <modelo> <num_muestras>```
 
 ### Notas adicionales
