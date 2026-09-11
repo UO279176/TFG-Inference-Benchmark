@@ -14,16 +14,35 @@ Para preparar el entorno de ejecución se utilizará Docker y se deben seguir lo
 5. Construir la imagen de Docker:
 ```docker build -f <dockerfile a usar> -t tfg-inference-benchmark .```
 6. Ejecutar el contenedor de Docker:
-- Si se va a usar GPU:
-```docker run -it --rm --gpus all -v ./src/data:/app/src/data -v ./results:/app/results tfg-inference-benchmark <acelerador> <modelo>```
-- Si se va a usar NPU con RKNN v2.3.0:
-```docker run -it --rm --privileged --device=/dev/dri/renderD128:/dev/dri/renderD128 -v ./src/data:/app/src/data -v ./results:/app/results -v ./src/data/libs/librknnrt_230.so:/usr/lib/librknnrt.so -v ./src/data/libs/librkllmrt.so:/usr/lib/librkllmrt.so -v /dev/dri/renderD128:/dev/dri/renderD128 -v /proc/device-tree/compatible:/proc/device-tree/compatible tfg-inference-benchmark <acelerador> <modelo>```
-- Si se va a usar NPU con RKNN v2.3.2:
-```docker run -it --rm --privileged --device=/dev/dri/renderD128:/dev/dri/renderD128 -v ./src/data:/app/src/data -v ./results:/app/results -v ./src/data/libs/librknnrt_232.so:/usr/lib/librknnrt.so -v ./src/data/libs/librkllmrt.so:/usr/lib/librkllmrt.so -v /dev/dri/renderD128:/dev/dri/renderD128 -v /proc/device-tree/compatible:/proc/device-tree/compatible tfg-inference-benchmark <acelerador> <modelo>```
-- Si se va a usar TPU:
-```docker run -it --rm --privileged -v ./src/data:/app/src/data -v ./results:/app/results -v /dev/bus/usb:/dev/bus/usb tfg-inference-benchmark <acelerador> <modelo>```
+```docker run -it --rm -v ./src/data:/app/src/data -v ./results:/app/results tfg-inference-benchmark <acelerador> <modelo> <num_muestras>```
+- Si se va a usar GPU, añadir estos parámetros al comando de ejecución:
+```-gpus all```
+- Si se va a usar NPU con RKNN v2.3.0, añadir estos parámetros al comando de ejecución:
+```--privileged --device=/dev/dri/renderD128:/dev/dri/renderD128 -v ./src/data/libs/librknnrt_230.so:/usr/lib/librknnrt.so -v ./src/data/libs/librkllmrt.so:/usr/lib/librkllmrt.so -v /dev/dri/renderD128:/dev/dri/renderD128 -v /proc/device-tree/compatible:/proc/device-tree/compatible```
+- Si se va a usar NPU con RKNN v2.3.2, añadir estos parámetros al comando de ejecución:
+```--privileged --device=/dev/dri/renderD128:/dev/dri/renderD128 -v ./src/data/libs/librknnrt_232.so:/usr/lib/librknnrt.so -v ./src/data/libs/librkllmrt.so:/usr/lib/librkllmrt.so -v /dev/dri/renderD128:/dev/dri/renderD128 -v /proc/device-tree/compatible:/proc/device-tree/compatible```
+- Si se va a usar TPU, añadir estos parámetros al comando de ejecución:
+```--privileged -v /dev/bus/usb:/dev/bus/usb```
 
 Ejecutar el contenedor sin parámetros mostrará la ayuda con las opciones disponibles.
+
+## Alternativa manual sin Docker
+En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker ha dado problemas en algún paso, se puede instalar y ejecutar manualmente el entorno:
+
+- Para la GPU de la Jetson AGX Orin:
+1. Crear un entorno virtual de Python:
+```python3 -m venv venv```
+2. Activar el entorno virtual:
+```source venv/bin/activate```
+3. Instalar las dependencias en el siguiente orden:
+```pip3 install --no-cache-dir torch torchaudio torchcodec --index-url https://pypi.jetson-ai-lab.io/jp6/cu126```
+```pip3 install nvidia-cudss-cu12```
+```pip3 install numpy```
+```pip3 install -r requirements-cuda-new.txt```
+4. Configurar la variable de entorno LD_LIBRARY_PATH, sustituyendo `<ruta_venv>` por la ruta absoluta del entorno virtual creado:
+```export LD_LIBRARY_PATH="<ruta_venv>/lib/python3.10/site-packages/nvidia/cu12/lib/:$LD_LIBRARY_PATH"```
+5. Ejecutar el benchmark:
+```python3 src/main.py <acelerador> <modelo> <num_muestras>```
 
 ### Notas adicionales
 La carpeta `src/data` no se copia dentro de la imagen para reducir su tamaño. Debe existir en el host y montarse al arrancar el contenedor.

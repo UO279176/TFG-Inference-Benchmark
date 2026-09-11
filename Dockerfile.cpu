@@ -1,5 +1,5 @@
-# Esta imagen es para sistemas con CUDA 12.6 y Python 3.10, concretamente para la Jetson Orin Nano y la Jetson Orin AGX
-FROM ubuntu:22.04 AS base-new
+# Esta imagen es para sistemas donde solo se va a usar su CPU
+FROM ubuntu:22.04 AS base-cpu
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-pip \
@@ -7,13 +7,11 @@ RUN apt-get update && apt-get install -y \
     sox \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir torch torchaudio torchcodec --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
-
 WORKDIR /app
-COPY requirements-cuda-new.txt ./requirements.txt
+COPY requirements-new.txt ./requirements.txt
 
 # Usamos la imagen base correspondiente
-FROM base-new AS final
+FROM base-cpu AS final
 
 WORKDIR /app
 

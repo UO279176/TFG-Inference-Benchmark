@@ -35,13 +35,14 @@ def resolve_execution_target(accelerator_identifier: Accelerator) -> ExecutionTa
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or sys.argv[1] not in accelerators_str or sys.argv[2] not in models_str:
-        print("USO: {0} <{1}> <{2}>".format(sys.argv[0], "|".join(accelerators_str), "|".join(models_str)))
+    if len(sys.argv) < 4 or sys.argv[1] not in accelerators_str or sys.argv[2] not in models_str:
+        print("USO: {0} <{1}> <{2}> <num_muestras>".format(sys.argv[0], "|".join(accelerators_str), "|".join(models_str)))
         sys.exit(1)
 
     accelerator_identifier = Accelerator(sys.argv[1])
     model_identifier = Model(sys.argv[2])
     resources = MODEL_RESOURCES[model_identifier]
+    num_samples = int(sys.argv[3])
     
     # Ajuste de la ruta del modelo para NPU
     if accelerator_identifier == Accelerator.NPU:
@@ -80,7 +81,7 @@ if __name__ == "__main__":
             model_identifier=model_identifier,
             accelerator_identifier=execution_target.accelerator
         )
-        runner.run_preview(max_samples=1, top_k=5)
+        runner.run_preview(max_samples=num_samples, top_k=5)
 
         print("Inferencia completada exitosamente")
         
