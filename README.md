@@ -3,6 +3,13 @@ Repositorio para mi TFG: Comparativa de dispositivos SBC de bajo coste para la e
 
 En esto repositorio se encuentra el código fuente del proyecto. El objetivo del proyecto es evaluar el rendimiento de diferentes dispositivos SBC (Single Board Computers) de bajo coste en la ejecución de modelos de inferencia de IA.
 
+Para ejecutar el programa, usar el comando:
+```python3 src/main.py <acelerador> <modelo> <num_muestras> [-v]```<br/>
+- `<acelerador>`: Identificador del acelerador a usar (CPU, GPU, NPU, TPU).<br/>
+- `<modelo>`: Identificador del modelo a usar (Comprobar strings de la clase Model en src/data.py).<br/>
+-`<num_muestras>`: Número de muestras a procesar del dataset.<br/>
+- `-v | --verbose`: (Opcional) Modo verbose, muestra información detallada de cada muestra procesada, como resultados de predicción y por qué paso del pipeline se encuentra.
+
 ## Preparación del entorno y ejecución
 Para preparar el entorno de ejecución se utilizará Docker y se deben seguir los siguientes pasos:
 1. Asegurarse de tener Docker instalado y en funcionamiento.
@@ -34,14 +41,14 @@ En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker
 ```python3 -m venv venv```
 2. Activar el entorno virtual:
 ```source venv/bin/activate```
-3. Instalar las dependencias en el siguiente orden:
-```pip3 install --no-cache-dir torch torchaudio torchcodec --index-url https://pypi.jetson-ai-lab.io/jp6/cu126```
-```pip3 install nvidia-cudss-cu12```
-```pip3 install numpy```
+3. Instalar las dependencias en el siguiente orden:<br/>
+```pip3 install --no-cache-dir torch torchaudio torchcodec --index-url https://pypi.jetson-ai-lab.io/jp6/cu126```<br/>
+```pip3 install nvidia-cudss-cu12```<br/>
+```pip3 install numpy```<br/>
 ```pip3 install -r requirements-cuda-new.txt```
 4. Desinstalar cublas para que no haya conflictos con la versión de cublas instalada en el sistema:
 ```pip3 uninstall nvidia-cublas-cu12```
-5. Configurar la variable de entorno LD_LIBRARY_PATH, sustituyendo `<ruta_venv>` por la ruta absoluta del entorno virtual creado:
+5. Configurar la variable de entorno LD_LIBRARY_PATH, sustituyendo `<ruta_venv>` por la ruta absoluta del entorno virtual creado (obligatorio siempre que se active el entorno virtual):
 ```export LD_LIBRARY_PATH="<ruta_venv>/lib/python3.10/site-packages/nvidia/cu12/lib/:$LD_LIBRARY_PATH"```
 6. Ejecutar el benchmark:
 ```python3 src/main.py <acelerador> <modelo> <num_muestras>```

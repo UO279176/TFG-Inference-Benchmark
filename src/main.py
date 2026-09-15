@@ -2,6 +2,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 import traceback
+from config import init_argparse
 
 import torch
 
@@ -35,14 +36,12 @@ def resolve_execution_target(accelerator_identifier: Accelerator) -> ExecutionTa
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 4 or sys.argv[1] not in accelerators_str or sys.argv[2] not in models_str:
-        print("USO: {0} <{1}> <{2}> <num_muestras>".format(sys.argv[0], "|".join(accelerators_str), "|".join(models_str)))
-        sys.exit(1)
-
-    accelerator_identifier = Accelerator(sys.argv[1])
-    model_identifier = Model(sys.argv[2])
+    args = init_argparse(accelerators_str, models_str)
+    
+    accelerator_identifier = Accelerator(args.accelerator)
+    model_identifier = Model(args.model)
     resources = MODEL_RESOURCES[model_identifier]
-    num_samples = int(sys.argv[3])
+    num_samples = args.num_samples
     
     # Ajuste de la ruta del modelo para NPU
     if accelerator_identifier == Accelerator.NPU:

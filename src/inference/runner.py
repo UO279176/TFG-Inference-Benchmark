@@ -1,5 +1,6 @@
 from inference.contracts import DatasetAdapter, ModelPipeline
 from data import Model, Accelerator
+from config import get_args
 import time
 
 from inference.metrics import Metrics
@@ -12,6 +13,7 @@ class InferenceRunner:
         self.accelerator_identifier = accelerator_identifier
         
     def run_preview(self, max_samples: int, top_k: int):
+        args = get_args()
         self.model_pipeline.load()
         samples = self.dataset_adapter.iter_samples(limit=max_samples)
 
@@ -21,12 +23,15 @@ class InferenceRunner:
 
         Metrics.start_monitoring(interval_seconds=1.0)
         
-        for sample in samples:
+        for i, sample in enumerate(samples):
             start_time = time.monotonic()
             predictions = self.model_pipeline.infer(sample=sample, top_k=top_k)
             end_time = time.monotonic()
             Metrics.add_inference_time(end_time - start_time)
-            self.print_inference(sample, predictions)
+            if args.verbose:
+                self.print_inference(sample, predictions)
+            else:
+                print(f"Muestra {i + 1} de {max_samples}...", end="\r")
             
         Metrics.stop_monitoring()
         self.model_pipeline.unload()
