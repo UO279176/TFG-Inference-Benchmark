@@ -271,7 +271,8 @@ class RetinaNetPipeline:
         
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
             self.tf_device = self._resolve_tf_device()
-            self.model = tf.saved_model.load(str(self.model_folder_path))
+            with tf.device(self.tf_device):
+                self.model = tf.saved_model.load(str(self.model_folder_path))
             printv(f"Modelo cargado exitosamente en {self.tf_device}")
             
         elif self.target.accelerator == Accelerator.NPU:

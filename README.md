@@ -42,9 +42,10 @@ En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker
 2. Activar el entorno virtual:
 ```source venv/bin/activate```
 3. Instalar las dependencias en el siguiente orden:<br/>
-```pip3 install --no-cache-dir torch torchaudio torchcodec --index-url https://pypi.jetson-ai-lab.io/jp6/cu126```<br/>
+```pip3 install torch torchaudio torchcodec --index-url https://pypi.jetson-ai-lab.io/jp6/cu126```<br/>
 ```pip3 install nvidia-cudss-cu12```<br/>
 ```pip3 install numpy```<br/>
+```pip3 install tensorflow==2.16.1+nv24.08 --index-url https://developer.nvidia.com/w/w/compute/redist/jp/v61 --no-deps```<br/>
 ```pip3 install -r requirements-cuda-new.txt```
 4. Desinstalar cublas para que no haya conflictos con la versión de cublas instalada en el sistema:
 ```pip3 uninstall nvidia-cublas-cu12```

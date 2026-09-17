@@ -1,6 +1,5 @@
 # Para Python 3.10 y 3.11
 transformers==4.53.0 # Para ejecución de modelos
-tensorflow==2.20.0 # Para ejecución de modelos
 sentencepiece==0.2.1 # Para el tokenizador de TinyLlama
 diffusers==0.37.1 # Para el pipeline de Stable Diffusion
 accelerate==1.13.0 # Mejora de carga de modelo para Stable Diffusion
