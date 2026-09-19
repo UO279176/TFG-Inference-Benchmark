@@ -1240,6 +1240,7 @@ class RNNTPipeline:
                 raw_transcription = model.transcribe(
                     audio=[model_inputs["audio_path"]],
                     batch_size=1,
+                    verbose=False
                 )
             
             return {
