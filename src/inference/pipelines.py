@@ -816,9 +816,14 @@ class StableDiffusion15Pipeline:
         self.output_folder_path.mkdir(parents=True, exist_ok=True)
         
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+            if self.target.accelerator == Accelerator.CPU:
+                stable_diffusion_dtype = torch.float32
+            else:
+                stable_diffusion_dtype = torch.float16
             self.model = StableDiffusionPipeline.from_pretrained(
                 str(self.model_folder_path),
-                torch_dtype=torch.float32,
+                variant="fp16",
+                torch_dtype=stable_diffusion_dtype,
                 local_files_only=True,
                 safety_checker=None,
                 feature_extractor=None,
