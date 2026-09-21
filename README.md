@@ -36,7 +36,7 @@ Ejecutar el contenedor sin parámetros mostrará la ayuda con las opciones dispo
 ## Alternativa manual sin Docker
 En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker ha dado problemas en algún paso, se puede instalar y ejecutar manualmente el entorno:
 
-- Para la GPU de la Jetson AGX Orin:
+- Para la GPU de la Jetson AGX Orin y Jetson Orin Nano:
 1. Crear un entorno virtual de Python:<br/>
 ```python3 -m venv venv```
 2. Activar el entorno virtual:<br/>
@@ -46,6 +46,7 @@ En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker
 ```pip3 install nvidia-cudss-cu12```<br/>
 ```pip3 install numpy```<br/>
 ```pip3 install tensorflow==2.16.1+nv24.08 --index-url https://developer.nvidia.com/w/w/compute/redist/jp/v61 --no-deps```<br/>
+```pip3 install gast astunparse opt_einsum flatbuffers```<br/>
 ```pip3 install -r requirements-cuda-new.txt```
 4. Desinstalar cublas para que no haya conflictos con la versión de cublas instalada en el sistema:<br/>
 ```pip3 uninstall nvidia-cublas-cu12```
@@ -59,7 +60,7 @@ En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker
 7. Configurar la variable de entorno LD_LIBRARY_PATH para que incluya la ruta de las librerías de FFMPEG compiladas (obligatorio siempre que se active el entorno virtual):<br/>
 ```export LD_LIBRARY_PATH="$HOME/ffmpeg_local_build/lib/:$LD_LIBRARY_PATH"```
 8. Compilar e instalar torchcodec, ya que la versión precompilada en el repositorio usado para instalar las dependencias no es compatible con ese PyTorch precompilado:<br/>
-```pip3 uninstall -y torchcodec```<br/>
+```pip3 uninstall -y torchcodec``` (en caso de haberlo instalado anteriormente)<br/>
 ```pip3 install ninja cmake setuptools wheel scikit_build_core```<br/>
 ```git clone https://github.com/pytorch/torchcodec.git && cd torchcodec```<br/>
 ```export PKG_CONFIG_PATH="$HOME/ffmpeg_local_build/lib/pkgconfig:$PKG_CONFIG_PATH"```<br/>
