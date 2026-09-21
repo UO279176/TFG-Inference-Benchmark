@@ -527,10 +527,10 @@ class TinyLlamaPipeline:
             
             self.model = AutoModelForCausalLM.from_pretrained(
                 str(self.model_folder_path),
-                torch_dtype=torch.float32,
+                device_map=self.target.device,
+                torch_dtype=torch.bfloat16,
                 local_files_only=True,
             )
-            self.model.to(self.target.device)
             self.model.eval()
             
         elif self.target.accelerator == Accelerator.NPU:
