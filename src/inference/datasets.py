@@ -1,8 +1,8 @@
-from __future__ import annotations
+# from __future__ import annotations
 from pathlib import Path
 import csv
 import pyarrow.parquet as pq
-
+from typing import List
 from PIL import Image
 
 from inference.contracts import AudioSample, ImageSample, TextSample
@@ -12,7 +12,7 @@ class ImageNetFolderDataset:
     def __init__(self, dataset_folder_path: Path):
         self.dataset_folder_path = dataset_folder_path
 
-    def iter_samples(self, limit: int | None = None) -> list[ImageSample]:
+    def iter_samples(self, limit: int = None) -> List[ImageSample]:
         print(f"Cargando muestras del dataset desde: {self.dataset_folder_path}")
         if not self.dataset_folder_path.exists():
             raise FileNotFoundError(f"No existe el dataset en la ruta: {self.dataset_folder_path}")
@@ -21,7 +21,7 @@ class ImageNetFolderDataset:
         if limit is not None:
             image_files = image_files[:limit]
 
-        samples: list[ImageSample] = []
+        samples: List[ImageSample] = []
         for image_path in image_files:
             image = Image.open(image_path).convert("RGB")
             samples.append(ImageSample(path=image_path, image=image))
@@ -32,7 +32,7 @@ class OpenImagesFolderDataset:
     def __init__(self, dataset_folder_path: Path):
         self.dataset_folder_path = dataset_folder_path
 
-    def iter_samples(self, limit: int | None = None) -> list[ImageSample]:
+    def iter_samples(self, limit: int = None) -> List[ImageSample]:
         print(f"Cargando muestras del dataset desde: {self.dataset_folder_path}")
         if not self.dataset_folder_path.exists():
             raise FileNotFoundError(f"No existe el dataset en la ruta: {self.dataset_folder_path}")
@@ -41,7 +41,7 @@ class OpenImagesFolderDataset:
         if limit is not None:
             image_files = image_files[:limit]
         
-        samples: list[ImageSample] = []
+        samples: List[ImageSample] = []
         for image_path in image_files:
             image = Image.open(image_path).convert("RGB")
             samples.append(ImageSample(path=image_path, image=image))
@@ -52,7 +52,7 @@ class CnnDailyMailDataset:
     def __init__(self, dataset_folder_path: Path):
         self.dataset_folder_path = dataset_folder_path
 
-    def iter_samples(self, limit: int | None = None) -> list[TextSample]:
+    def iter_samples(self, limit: int = None) -> List[TextSample]:
         print(f"Cargando muestras del dataset desde: {self.dataset_folder_path}")
         if not self.dataset_folder_path.exists():
             raise FileNotFoundError(f"No existe el dataset en la ruta: {self.dataset_folder_path}")
@@ -61,7 +61,7 @@ class CnnDailyMailDataset:
         if not csv_path.exists():
             raise FileNotFoundError(f"No existe el archivo de validación en la ruta: {csv_path}")
 
-        samples: list[TextSample] = []
+        samples: List[TextSample] = []
         with csv_path.open("r", encoding="utf-8", newline="") as csv_file:
             reader = csv.DictReader(csv_file)
             for row in reader:
@@ -85,7 +85,7 @@ class StableDiffusionPromptsDataset:
     def __init__(self, dataset_folder_path: Path):
         self.dataset_folder_path = dataset_folder_path
 
-    def iter_samples(self, limit: int | None = None) -> list[TextSample]:
+    def iter_samples(self, limit: int = None) -> List[TextSample]:
         print(f"Cargando muestras del dataset desde: {self.dataset_folder_path}")
         if not self.dataset_folder_path.exists():
             raise FileNotFoundError(f"No existe el dataset en la ruta: {self.dataset_folder_path}")
@@ -94,7 +94,7 @@ class StableDiffusionPromptsDataset:
         if not prompts_path.exists():
             raise FileNotFoundError(f"No existe el archivo de prompts en la ruta: {prompts_path}")
 
-        samples: list[TextSample] = []
+        samples: List[TextSample] = []
         with prompts_path.open("r", encoding="utf-8") as prompts_file:
             for line_number, raw_line in enumerate(prompts_file, start=1):
                 prompt = raw_line.strip()
@@ -115,7 +115,7 @@ class LibriSpeechParquetDataset:
         self.dataset_folder_path = dataset_folder_path
         self.extracted_audio_path = self.dataset_folder_path / "_extracted_audio"
 
-    def _resolve_transcript(self, row: dict) -> str | None:
+    def _resolve_transcript(self, row: dict) -> str:
         for key in ("text", "sentence", "transcript", "normalized_text"):
             value = row.get(key)
             if isinstance(value, str) and value.strip():
@@ -144,7 +144,7 @@ class LibriSpeechParquetDataset:
 
         raise ValueError("Fila de LibriSpeech sin audio compatible: se esperaba audio.path o audio.bytes")
 
-    def iter_samples(self, limit: int | None = None) -> list[AudioSample]:
+    def iter_samples(self, limit: int = None) -> List[AudioSample]:
         print(f"Cargando muestras del dataset desde: {self.dataset_folder_path}")
         if not self.dataset_folder_path.exists():
             raise FileNotFoundError(f"No existe el dataset en la ruta: {self.dataset_folder_path}")
@@ -153,7 +153,7 @@ class LibriSpeechParquetDataset:
         if not parquet_files:
             raise FileNotFoundError(f"No se encontró ningún archivo .parquet en: {self.dataset_folder_path}")
 
-        samples: list[AudioSample] = []
+        samples: List[AudioSample] = []
         for parquet_path in parquet_files:
             parquet_file = pq.ParquetFile(parquet_path)
             for batch in parquet_file.iter_batches(batch_size=128):

@@ -1,7 +1,8 @@
-from __future__ import annotations
+# from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Sequence, List, Dict
+from typing_extensions import Protocol
 
 import torch
 from PIL import Image
@@ -17,18 +18,18 @@ class ImageSample:
 class TextSample:
     path: Path # Para CNN DailyMail News, como solo es un archivo CSV, esta variable indica el ID, no su ruta
     prompt: str
-    reference: str | None = None
+    reference: str = None
 
 
 @dataclass(frozen=True)
 class AudioSample:
     path: Path # Para LibriSpeech, esta variable indica el ID del sample, no su ruta completa
     audio_path: Path
-    reference: str | None = None
+    reference: str = None
 
 
 class DatasetAdapter(Protocol):
-    def iter_samples(self, limit: int | None = None) -> list[Any]:
+    def iter_samples(self, limit: int = None) -> List[Any]:
         """Iterar sobre las muestras del dataset y devolver una lista de muestras."""
         ...
 
@@ -38,11 +39,11 @@ class ModelPipeline(Protocol):
         """Cargar el modelo y cualquier recurso necesario (ej. etiquetas)."""
         ...
 
-    def preprocess(self, sample: Any) -> dict[str, Any]:
+    def preprocess(self, sample: Any) -> Dict[str, Any]:
         """Convertir la muestra de entrada en los tensores que el modelo espera como input."""
         ...
 
-    def predict(self, model_inputs: dict[str, Any]) -> Any:
+    def predict(self, model_inputs: Dict[str, Any]) -> Any:
         """Ejecutar la inferencia en el modelo y devolver los logits (salidas crudas)."""
         ...
 

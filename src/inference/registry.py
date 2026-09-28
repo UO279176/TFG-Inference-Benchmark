@@ -1,12 +1,12 @@
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Dict
 
 from data import Dataset, ExecutionTarget, Model, ModelResources
 from inference.contracts import DatasetAdapter, ModelPipeline
 from inference.datasets import CnnDailyMailDataset, ImageNetFolderDataset, LibriSpeechParquetDataset, OpenImagesFolderDataset, StableDiffusionPromptsDataset
 from inference.pipelines import ResNet50Pipeline, RetinaNetPipeline, TinyLlamaPipeline, StableDiffusion15Pipeline, RNNTPipeline
 
-MODEL_PIPELINE_REGISTRY: dict[Model, Callable[..., ModelPipeline]] = {
+MODEL_PIPELINE_REGISTRY: Dict[Model, Callable[..., ModelPipeline]] = {
     Model.RESNET50: ResNet50Pipeline,
     Model.RETINANET: RetinaNetPipeline,
     Model.TINYLLAMA: TinyLlamaPipeline,
@@ -14,7 +14,7 @@ MODEL_PIPELINE_REGISTRY: dict[Model, Callable[..., ModelPipeline]] = {
     Model.RNNT: RNNTPipeline,
 }
 
-DATASET_ADAPTER_REGISTRY: dict[Dataset, Callable[..., DatasetAdapter]] = {
+DATASET_ADAPTER_REGISTRY: Dict[Dataset, Callable[..., DatasetAdapter]] = {
     Dataset.IMAGENET: ImageNetFolderDataset,
     Dataset.OPENIMAGES: OpenImagesFolderDataset,
     Dataset.CNN_DAILYMAIL_NEWS: CnnDailyMailDataset,

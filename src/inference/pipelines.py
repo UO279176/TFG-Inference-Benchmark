@@ -1,10 +1,10 @@
-from __future__ import annotations
+# from __future__ import annotations
 
 import faulthandler
 faulthandler.enable()
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, List, Dict, Tuple
 from datetime import datetime
 import ctypes
 import os
@@ -14,7 +14,7 @@ import numpy as np
 import json
 import torch
 import torchaudio
-from transformers import AutoModelForImageClassification, AutoModelForCausalLM, LlamaTokenizerFast, CLIPTokenizer
+from transformers import AutoModelForImageClassification, AutoModelForCausalLM, AutoTokenizer, CLIPTokenizer
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
 
@@ -62,7 +62,7 @@ class ResNet50Pipeline:
     def __init__(
         self,
         model_folder_path: Path,
-        labels_path: Path | None,
+        labels_path: Path,
         target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
@@ -76,7 +76,7 @@ class ResNet50Pipeline:
         self.mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(3, 1, 1)
         self.std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(3, 1, 1)
 
-    def _load_labels(self) -> list[str]:
+    def _load_labels(self) -> List[str]:
         if self.labels_path is None or not self.labels_path.exists():
             return []
 
@@ -138,7 +138,7 @@ class ResNet50Pipeline:
         input_data = np.expand_dims(image_array, axis=0)
         return input_data
 
-    def preprocess(self, sample: ImageSample) -> dict[str, Any]:
+    def preprocess(self, sample: ImageSample) -> Dict[str, Any]:
         printv(f"Preprocesando muestra: {sample.path}")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
@@ -155,7 +155,7 @@ class ResNet50Pipeline:
 
         return {"pixel_values": pixel_values}
 
-    def predict(self, model_inputs: dict[str, Any]) -> torch.Tensor:
+    def predict(self, model_inputs: Dict[str, Any]) -> torch.Tensor:
         printv("Ejecutando inferencia en el modelo")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
@@ -200,7 +200,7 @@ class ResNet50Pipeline:
         else:
             raise RuntimeError(f"Acelerador no soportado para ResNet50: {self.target.accelerator}")
 
-    def decode(self, logits: torch.Tensor, top_k: int = 5) -> list[tuple[int, float, str]]:
+    def decode(self, logits: torch.Tensor, top_k: int = 5) -> List[Tuple[int, float, str]]:
         printv("Decodificando resultados de inferencia")
         
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU or self.target.accelerator == Accelerator.NPU:
@@ -212,14 +212,14 @@ class ResNet50Pipeline:
         
         scores, indices = torch.topk(probabilities, k=top_k)
 
-        predictions: list[tuple[int, float, str]] = []
+        predictions: List[Tuple[int, float, str]] = []
         for class_index, score in zip(indices.tolist(), scores.tolist()):
             label = self.labels[class_index] if class_index < len(self.labels) else f"class_{class_index}"
             predictions.append((class_index, score, label))
 
         return predictions
 
-    def infer(self, sample: ImageSample, top_k: int = 5) -> list[tuple[int, float, str]]:
+    def infer(self, sample: ImageSample, top_k: int = 5) -> List[Tuple[int, float, str]]:
         printv(f"Inferiendo muestra: {sample.path}")
         model_inputs = self.preprocess(sample)
         logits = self.predict(model_inputs)
@@ -240,7 +240,7 @@ class RetinaNetPipeline:
     def __init__(
         self,
         model_folder_path: Path,
-        labels_path: Path | None,
+        labels_path: Path,
         target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
@@ -315,7 +315,7 @@ class RetinaNetPipeline:
         input_data = np.expand_dims(image_array, axis=0)
         return input_data
 
-    def preprocess(self, sample: ImageSample) -> dict[str, Any]:
+    def preprocess(self, sample: ImageSample) -> Dict[str, Any]:
         printv(f"Preprocesando muestra: {sample.path}")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
@@ -333,7 +333,7 @@ class RetinaNetPipeline:
             
         return {"input_tensor": batch}
 
-    def predict(self, model_inputs: dict[str, Any]) -> dict:
+    def predict(self, model_inputs: Dict[str, Any]) -> dict:
         printv("Ejecutando inferencia en el modelo")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
@@ -372,11 +372,11 @@ class RetinaNetPipeline:
         else:
             raise RuntimeError(f"Acelerador no soportado para RetinaNet: {self.target.accelerator}")
 
-    def _load_labels(self) -> list[str]:
+    def _load_labels(self) -> List[str]:
         if self.labels_path is None or not self.labels_path.exists():
             return []
 
-        class_labels: list[str] = []
+        class_labels: List[str] = []
         with self.labels_path.open("r", encoding="utf-8") as labels_file:
             for raw_line in labels_file:
                 line = raw_line.strip()
@@ -427,7 +427,7 @@ class RetinaNetPipeline:
 
         raise ValueError(f"Formato de salida no soportado en RetinaNet: shape={output.shape}")
 
-    def decode(self, logits: object, top_k: int = 5) -> list[dict[str, object]]:
+    def decode(self, logits: object, top_k: int = 5) -> List[Dict[str, object]]:
         printv("Decodificando resultados de inferencia")
 
         output_tensor = logits
@@ -450,7 +450,7 @@ class RetinaNetPipeline:
 
         sorted_indices = np.argsort(-best_scores)
 
-        predictions: list[dict[str, object]] = []
+        predictions: List[Dict[str, object]] = []
         seen_classes: set[int] = set()
         for anchor_idx in sorted_indices:
             class_id = int(best_class_ids[anchor_idx])
@@ -475,7 +475,7 @@ class RetinaNetPipeline:
 
         return predictions
 
-    def infer(self, sample: ImageSample, top_k: int = 5) -> list[dict[str, object]]:
+    def infer(self, sample: ImageSample, top_k: int = 5) -> List[Dict[str, object]]:
         printv(f"Inferiendo muestra: {sample.path}")
         model_inputs = self.preprocess(sample)
         detections = self.predict(model_inputs)
@@ -496,7 +496,7 @@ class TinyLlamaPipeline:
     def __init__(
         self,
         model_folder_path: Path,
-        labels_path: Path | None,
+        labels_path: Path,
         target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
@@ -514,7 +514,7 @@ class TinyLlamaPipeline:
         
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
             try:
-                self.tokenizer = LlamaTokenizerFast.from_pretrained(
+                self.tokenizer = AutoTokenizer.from_pretrained(
                     str(self.model_folder_path),
                     local_files_only=True
                 )
@@ -543,7 +543,7 @@ class TinyLlamaPipeline:
         elif self.target.accelerator == Accelerator.TPU:
             # Tokenizer
             try:
-                self.tokenizer = LlamaTokenizerFast.from_pretrained(
+                self.tokenizer = AutoTokenizer.from_pretrained(
                     str(self.model_folder_path),
                     local_files_only=True
                 )
@@ -568,7 +568,7 @@ class TinyLlamaPipeline:
         
         printv("Modelo cargado exitosamente")
 
-    def preprocess(self, sample: TextSample) -> dict[str, Any]:
+    def preprocess(self, sample: TextSample) -> Dict[str, Any]:
         printv(f"Preprocesando muestra: {sample.path}")
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
             tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
@@ -622,7 +622,7 @@ class TinyLlamaPipeline:
         else:
             raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
 
-    def _tpu_input_value(self, values: np.ndarray, detail: dict[str, Any]) -> np.ndarray:
+    def _tpu_input_value(self, values: np.ndarray, detail: Dict[str, Any]) -> np.ndarray:
         dtype = np.dtype(detail["dtype"])
         scale, zero_point = detail.get("quantization", (0.0, 0))
         if np.issubdtype(dtype, np.integer) and scale:
@@ -631,7 +631,7 @@ class TinyLlamaPipeline:
             values = np.clip(values, info.min, info.max)
         return np.asarray(values, dtype=dtype)
 
-    def _tpu_inputs(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> list[np.ndarray]:
+    def _tpu_inputs(self, input_ids: np.ndarray, attention_mask: np.ndarray) -> List[np.ndarray]:
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
 
@@ -649,7 +649,7 @@ class TinyLlamaPipeline:
             inputs.append(self._tpu_input_value(values[key], detail))
         return inputs
 
-    def predict(self, model_inputs: dict[str, Any]) -> dict[str, Any]:
+    def predict(self, model_inputs: Dict[str, Any]) -> Dict[str, Any]:
         printv("Ejecutando inferencia en el modelo")
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
             model = self.model # Guardamos en variable local para evitar problemas de acceso
@@ -734,7 +734,7 @@ class TinyLlamaPipeline:
         else:
             raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
 
-    def decode(self, logits: dict[str, Any], top_k: int = 5) -> list[dict[str, object]]:
+    def decode(self, logits: Dict[str, Any], top_k: int = 5) -> List[Dict[str, object]]:
         printv("Decodificando resultados de inferencia")
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU or self.target.accelerator == Accelerator.TPU:
             tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
@@ -755,7 +755,7 @@ class TinyLlamaPipeline:
             else:
                 display_text = "[sin texto generado]"
 
-            predictions: list[dict[str, object]] = [
+            predictions: List[Dict[str, object]] = [
                 {
                     "text": display_text
                 }
@@ -773,7 +773,7 @@ class TinyLlamaPipeline:
         else:
             raise RuntimeError(f"Acelerador no soportado para TinyLlama: {self.target.accelerator}")
 
-    def infer(self, sample: TextSample, top_k: int = 5) -> list[dict[str, object]]:
+    def infer(self, sample: TextSample, top_k: int = 5) -> List[Dict[str, object]]:
         printv(f"Inferiendo muestra: {sample.path}")
         model_inputs = self.preprocess(sample)
         output_ids = self.predict(model_inputs)
@@ -794,7 +794,7 @@ class StableDiffusion15Pipeline:
     def __init__(
         self,
         model_folder_path: Path,
-        labels_path: Path | None,
+        labels_path: Path,
         target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
@@ -860,7 +860,7 @@ class StableDiffusion15Pipeline:
         
         printv("Modelo cargado exitosamente")
 
-    def preprocess(self, sample: TextSample) -> dict[str, object]:
+    def preprocess(self, sample: TextSample) -> Dict[str, object]:
         printv(f"Preprocesando muestra: {sample.path}")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
@@ -893,7 +893,7 @@ class StableDiffusion15Pipeline:
         else:
             raise ValueError(f"Acelerador no soportado: {self.target.accelerator}")
 
-    def predict(self, model_inputs: dict[str, object]) -> dict[str, object]:
+    def predict(self, model_inputs: Dict[str, object]) -> Dict[str, object]:
         printv("Ejecutando inferencia en el modelo")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
@@ -957,7 +957,7 @@ class StableDiffusion15Pipeline:
         else:
             raise ValueError(f"Acelerador no soportado: {self.target.accelerator}")
 
-    def decode(self, logits: dict[str, object], top_k: int = 5) -> list[dict[str, object]]:
+    def decode(self, logits: Dict[str, object], top_k: int = 5) -> List[Dict[str, object]]:
         printv("Decodificando resultados de inferencia")
         if "image" not in logits or "prompt" not in logits or "sample_path" not in logits:
             raise ValueError("Formato de salida no soportado en Stable Diffusion")
@@ -992,7 +992,7 @@ class StableDiffusion15Pipeline:
             }
         ]
 
-    def infer(self, sample: TextSample, top_k: int = 5) -> list[dict[str, object]]:
+    def infer(self, sample: TextSample, top_k: int = 5) -> List[Dict[str, object]]:
         printv(f"Inferiendo muestra: {sample.path}")
         model_inputs = self.preprocess(sample)
         output = self.predict(model_inputs)
@@ -1013,7 +1013,7 @@ class RNNTPipeline:
     def __init__(
         self,
         model_folder_path: Path,
-        labels_path: Path | None,
+        labels_path: Path,
         target: ExecutionTarget
     ):
         self.model_folder_path = model_folder_path
@@ -1033,7 +1033,7 @@ class RNNTPipeline:
             )
         return nemo_files[0]
 
-    def _load_labels(self) -> list[str]:
+    def _load_labels(self) -> List[str]:
         if self.labels_path is None or not self.labels_path.exists():
             printv("Advertencia: No se encontró el archivo de etiquetas (tokens.txt).")
             return []
@@ -1166,7 +1166,7 @@ class RNNTPipeline:
         logmelspec_norm = (logmelspec_np - mean) / (std + 1e-5)
         return logmelspec_norm
 
-    def preprocess(self, sample: AudioSample) -> dict[str, Any]:
+    def preprocess(self, sample: AudioSample) -> Dict[str, Any]:
         printv(f"Preprocesando muestra: {sample.path}")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
@@ -1233,7 +1233,7 @@ class RNNTPipeline:
 
         return str(raw_output).strip()
 
-    def predict(self, model_inputs: dict[str, Any]) -> dict[str, Any]:
+    def predict(self, model_inputs: Dict[str, Any]) -> Dict[str, Any]:
         printv("Ejecutando inferencia en el modelo")
         if self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
@@ -1324,7 +1324,7 @@ class RNNTPipeline:
                 "reference": model_inputs.get("reference")
             }
 
-    def decode(self, logits: dict[str, Any], top_k: int = 5) -> list[dict[str, Any]]:
+    def decode(self, logits: Dict[str, Any], top_k: int = 5) -> List[Dict[str, Any]]:
         printv("Decodificando resultados de inferencia")
 
         if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
@@ -1365,7 +1365,7 @@ class RNNTPipeline:
         else:
             raise RuntimeError(f"Acelerador no soportado para RNNT: {self.target.accelerator}")
 
-    def infer(self, sample: AudioSample, top_k: int = 5) -> list[dict[str, Any]]:
+    def infer(self, sample: AudioSample, top_k: int = 5) -> List[Dict[str, Any]]:
         printv(f"Inferiendo muestra: {sample.path}")
         model_inputs = self.preprocess(sample)
         output = self.predict(model_inputs)

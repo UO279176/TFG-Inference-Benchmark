@@ -1,27 +1,36 @@
-from __future__ import annotations
+# from __future__ import annotations
 
 from enum import Enum
 from dataclasses import dataclass
 
 import torch
 
-@dataclass(frozen=True)
-class ModelResources:
-    model_folder_path: str # Ruta relativa del modelo
-    labels_path: str | None # Ruta relativa del archivo de etiquetas (si aplica)
-    dataset: Dataset | None # Tipo de dataset asociado al modelo
-    dataset_folder_path: str # Ruta relativa del dataset asociado al modelo
-
-@dataclass(frozen=True)
-class ExecutionTarget:
-    accelerator: Accelerator
-    device: torch.device | None
-
 class Accelerator(Enum):
     CPU = "cpu"
     GPU = "gpu"
     NPU = "npu"
     TPU = "tpu"
+    
+class Dataset(Enum):
+    IMAGENET = "imagenet"
+    OPENIMAGES = "openimages"
+    CNN_DAILYMAIL_NEWS = "cnn_dailymail_news"
+    STABLE_DIFFUSION_PROMPTS = "stable_diffusion_prompts"
+    LIBRISPEECH = "librispeech"
+
+@dataclass(frozen=True)
+class ModelResources:
+    model_folder_path: str # Ruta relativa del modelo
+    labels_path: str # Ruta relativa del archivo de etiquetas (si aplica)
+    dataset: Dataset # Tipo de dataset asociado al modelo
+    dataset_folder_path: str # Ruta relativa del dataset asociado al modelo
+
+@dataclass(frozen=True)
+class ExecutionTarget:
+    accelerator: Accelerator
+    device: torch.device
+
+
     
 # Nombre de los modelos. Estos serán usados para validar la entrada del usuario
 class Model(Enum):
@@ -31,12 +40,7 @@ class Model(Enum):
     STABLE_DIFFUSION = "stable_diffusion"
     RNNT = "rnnt"
 
-class Dataset(Enum):
-    IMAGENET = "imagenet"
-    OPENIMAGES = "openimages"
-    CNN_DAILYMAIL_NEWS = "cnn_dailymail_news"
-    STABLE_DIFFUSION_PROMPTS = "stable_diffusion_prompts"
-    LIBRISPEECH = "librispeech"
+
 
 # Asociación de cada modelo con sus recursos
 MODEL_RESOURCES = {
