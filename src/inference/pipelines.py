@@ -3,6 +3,10 @@
 import faulthandler
 faulthandler.enable()
 
+import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit
+
 from pathlib import Path
 from typing import Any, cast, List, Dict, Tuple
 from datetime import datetime
@@ -17,6 +21,16 @@ import torchaudio
 from transformers import AutoModelForImageClassification, AutoModelForCausalLM, AutoTokenizer, CLIPTokenizer
 from transformers.utils import logging as hf_logging
 import tensorflow as tf
+
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        # Activar el crecimiento de memoria para cada GPU detectada
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print("Crecimiento dinámico de memoria GPU activado.")
+    except RuntimeError as e:
+        print(e)
 
 from inference.contracts import AudioSample, ImageSample, TextSample
 from data import ExecutionTarget, Accelerator
@@ -269,11 +283,50 @@ class RetinaNetPipeline:
         if not self.model_folder_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
         
-        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+        if self.target.accelerator == Accelerator.CPU:
             self.tf_device = self._resolve_tf_device()
             with tf.device(self.tf_device):
                 self.model = tf.saved_model.load(str(self.model_folder_path))
-            printv(f"Modelo cargado exitosamente en {self.tf_device}")
+            
+            import gc
+            gc.collect()
+            printv(f"Modelo cargado exitosamente en {self.tf_device} y RAM limpiada")
+        
+        elif self.target.accelerator == Accelerator.GPU:
+            printv("Cargando motor TensorRT...")
+            TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+            trt.init_libnvinfer_plugins(TRT_LOGGER, "")
+
+            engine_path = str(self.model_folder_path / "retinanet.engine")
+            with open(engine_path, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
+                self.engine = runtime.deserialize_cuda_engine(f.read())
+            
+            self.context = self.engine.create_execution_context()
+            self.stream = cuda.Stream()
+            
+            # Gestión manual de buffers
+            self.inputs = []
+            self.outputs = []
+            self.bindings = []
+            
+            for i in range(self.engine.num_bindings):
+                name = self.engine.get_binding_name(i)
+                dtype = trt.nptype(self.engine.get_binding_dtype(i))
+                
+                shape = self.engine.get_binding_shape(i)
+                size = abs(trt.volume(shape)) 
+                
+                host_mem = cuda.pagelocked_empty(size, dtype)
+                device_mem = cuda.mem_alloc(host_mem.nbytes)
+                
+                self.bindings.append(int(device_mem))
+                
+                if self.engine.binding_is_input(i):
+                    self.inputs.append({'host': host_mem, 'device': device_mem, 'shape': shape, 'name': name})
+                else:
+                    self.outputs.append({'host': host_mem, 'device': device_mem, 'shape': shape, 'name': name})
+                    
+            printv("Motor TensorRT cargado y VRAM reservada exitosamente.")
             
         elif self.target.accelerator == Accelerator.NPU:
             self.model = RKNNLite()
@@ -317,13 +370,17 @@ class RetinaNetPipeline:
 
     def preprocess(self, sample: ImageSample) -> Dict[str, Any]:
         printv(f"Preprocesando muestra: {sample.path}")
-        if self.model is None:
+        if self.target.accelerator != Accelerator.GPU and self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
         
         batch = None
-        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+        if self.target.accelerator == Accelerator.CPU:
             tensor = self._image_to_tensor(sample)
             batch = tf.expand_dims(tensor, axis=0)
+        elif self.target.accelerator == Accelerator.GPU:
+            resized = sample.image.resize((self.image_size, self.image_size))
+            image_array = np.array(resized, dtype=np.float32)
+            batch = np.ascontiguousarray(np.expand_dims(image_array, axis=0))
         elif self.target.accelerator == Accelerator.NPU:
             batch = self._image_to_numpy(sample)
         elif self.target.accelerator == Accelerator.TPU:
@@ -335,14 +392,42 @@ class RetinaNetPipeline:
 
     def predict(self, model_inputs: Dict[str, Any]) -> dict:
         printv("Ejecutando inferencia en el modelo")
-        if self.model is None:
+        if self.target.accelerator != Accelerator.GPU and self.model is None:
             raise RuntimeError("El modelo todavía no está cargado")
 
-        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+        if self.target.accelerator == Accelerator.CPU:
             concrete_func = self.model.signatures["serving_default"]
             with tf.device(self.tf_device):
                 detections = concrete_func(input_1=model_inputs["input_tensor"])
             return detections
+        
+        elif self.target.accelerator == Accelerator.GPU:
+            input_data = model_inputs["input_tensor"]
+            
+            # Aplastar el array y copiarlo a la memoria reservada en RAM
+            np.copyto(self.inputs[0]['host'], input_data.ravel())
+            
+            # Enviar los píxeles de la CPU a la GPU
+            for inp in self.inputs:
+                cuda.memcpy_htod_async(inp['device'], inp['host'], self.stream)
+                
+            # Dar la orden de ejecutar los cálculos matriciales
+            self.context.execute_async_v2(bindings=self.bindings, stream_handle=self.stream.handle)
+            
+            # Traer las detecciones desde la GPU de vuelta a la CPU
+            for out in self.outputs:
+                cuda.memcpy_dtoh_async(out['host'], out['device'], self.stream)
+                
+            # Sincronizar para esperar a que la GPU termine
+            self.stream.synchronize()
+            
+            # Reconstruir los tensores de salida con su forma original
+            results = {}
+            for out in self.outputs:
+                real_shape = [1 if d == -1 else d for d in out['shape']]
+                results[out['name']] = out['host'].reshape(real_shape)
+                
+            return results
         
         elif self.target.accelerator == Accelerator.NPU:
             rknn_outputs = self.model.inference(inputs=[model_inputs["input_tensor"]])
@@ -483,11 +568,25 @@ class RetinaNetPipeline:
 
     def unload(self) -> None:
         printv("Descargando modelo de memoria")
-        if self.model is None:
+        if self.target.accelerator != Accelerator.GPU and self.model is None:
             printv("El modelo ya estaba descargado")
             return
         
-        if self.target.accelerator == Accelerator.NPU:
+        if self.target.accelerator == Accelerator.GPU:
+            # Liberamos explícitamente la memoria VRAM
+            if hasattr(self, 'inputs'):
+                for inp in self.inputs:
+                    inp['device'].free()
+                for out in self.outputs:
+                    out['device'].free()
+            # Destruimos los contextos matemáticos
+            if hasattr(self, 'context'):
+                del self.context
+            if hasattr(self, 'engine'):
+                del self.engine
+            printv("Memoria VRAM de PyCUDA liberada.")
+            
+        elif self.target.accelerator == Accelerator.NPU:
             self.model.release()
             
 
