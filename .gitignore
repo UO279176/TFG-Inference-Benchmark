@@ -210,7 +210,11 @@ __marimo__/
 src/data/datasets/*
 src/data/labels/*
 src/data/models/*
+src/data/libs/*
+src/data/bin/*
 
 !src/data/datasets/datasets.txt
 !src/data/labels/labels.txt
 !src/data/models/models.txt
+!src/data/libs/libs.txt
+!src/data/bin/bin.txt
