@@ -1069,13 +1069,11 @@ class RNNTPipeline:
 
             model_path = self._resolve_model_path()
             printv("Iniciando restore_from de NeMo...")
-            loaded_model: Any = ASRModel.restore_from(
+            self.model = ASRModel.restore_from(
                 restore_path=str(model_path),
                 map_location=self.target.device,
             )
-            self.model = loaded_model
-            model: Any = self.model
-            model.eval()
+            self.model.eval()
             
         elif self.target.accelerator == Accelerator.NPU:
             self.model = [RKNNLite(), RKNNLite()]
