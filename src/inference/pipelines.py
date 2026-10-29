@@ -13,6 +13,9 @@ from datetime import datetime
 import ctypes
 import os
 import tempfile
+import urllib.request
+import subprocess
+import time
 
 import numpy as np
 import json
@@ -38,16 +41,19 @@ from config import printv
 
 try:
     from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipeline
-    from diffusers.schedulers import LCMScheduler
 except Exception:
     StableDiffusionPipeline = None
-    LCMScheduler = None
-    print("Advertencia: diffusers no está instalado o no es compatible con la versión de Python. Los modelos de Stable Diffusion para CPU/GPU/NPU no funcionarán.")
+    print("Advertencia: diffusers no está instalado o no es compatible con la versión de Python. Los modelos de Stable Diffusion para CPU/GPU no funcionarán.")
 
 try:
-    from nemo.collections.asr.models import ASRModel
+    from diffusers.schedulers import LCMScheduler
 except Exception:
-    ASRModel = None
+    LCMScheduler = None
+    print("Advertencia: diffusers no contiene LCMScheduler. Los modelos de Stable Diffusion para NPU no funcionarán.")
+try:
+    from nemo.collections.asr.models import EncDecRNNTBPEModel
+except Exception:
+    EncDecRNNTBPEModel = None
     print("Advertencia: nemo_toolkit no está instalado o no es compatible con la versión de Python. Los modelos NeMo para CPU/GPU no funcionarán.")
 
 try:
@@ -611,7 +617,7 @@ class TinyLlamaPipeline:
         if not self.model_folder_path.exists():
             raise FileNotFoundError(f"El modelo no se encontró en la ruta: {self.model_folder_path}")
         
-        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+        if self.target.accelerator == Accelerator.CPU:
             try:
                 self.tokenizer = AutoTokenizer.from_pretrained(
                     str(self.model_folder_path),
@@ -631,6 +637,30 @@ class TinyLlamaPipeline:
                 local_files_only=True,
             )
             self.model.eval()
+        
+        elif self.target.accelerator == Accelerator.GPU:
+            command = [
+                "src/data/bin/llama-cpp-server",
+                "-m", str(self.model_folder_path / "tinyllama_fp16.gguf"),
+                "-ngl", "999",
+                "--host", "127.0.0.1",
+                "--port", "8080"
+            ]
+            
+            self.model = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            ready = False
+            for _ in range(60):
+                try:
+                    urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=1)
+                    ready = True
+                    break
+                except Exception:
+                    time.sleep(2)
+            
+            if not ready:
+                raise RuntimeError("Servidor de TinyLlama no respondió en el tiempo esperado")
+            printv("Servidor de TinyLlama iniciado y listo para la inferencia")
             
         elif self.target.accelerator == Accelerator.NPU:
             self.model = RKLLM(
@@ -669,7 +699,7 @@ class TinyLlamaPipeline:
 
     def preprocess(self, sample: TextSample) -> Dict[str, Any]:
         printv(f"Preprocesando muestra: {sample.path}")
-        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+        if self.target.accelerator == Accelerator.CPU:
             tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
             if tokenizer is None:
                 raise RuntimeError("El modelo todavía no está cargado")
@@ -684,7 +714,7 @@ class TinyLlamaPipeline:
                 "input_length": torch.tensor([input_length], device=self.target.device)
             }
             
-        elif self.target.accelerator == Accelerator.NPU:
+        elif self.target.accelerator == Accelerator.GPU or self.target.accelerator == Accelerator.NPU:
             prompt_text = sample.prompt[:self.max_input_chars]
             prompt = f"Summarize the following news article:\n\n{prompt_text}"
             return {
@@ -750,7 +780,7 @@ class TinyLlamaPipeline:
 
     def predict(self, model_inputs: Dict[str, Any]) -> Dict[str, Any]:
         printv("Ejecutando inferencia en el modelo")
-        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU:
+        if self.target.accelerator == Accelerator.CPU:
             model = self.model # Guardamos en variable local para evitar problemas de acceso
             tokenizer = self.tokenizer
             if model is None or tokenizer is None:
@@ -775,6 +805,31 @@ class TinyLlamaPipeline:
                 "output_ids": output_ids,
                 "input_length": model_inputs["input_length"]
             }
+            
+        elif self.target.accelerator == Accelerator.GPU:
+            if self.model is None:
+                raise RuntimeError("El servidor de TinyLlama todavía no está listo")
+            
+            data = {
+                "prompt": model_inputs["prompt"],
+                "n_predict": self.max_output_tokens,
+                "temperature": 0,
+                "stream": False
+            }
+            
+            req = urllib.request.Request(
+                "http://127.0.0.1:8080/completion",
+                data=json.dumps(data).encode('utf-8'),
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            with urllib.request.urlopen(req) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"Servidor de TinyLlama devolvió un error HTTP {response.status}")
+                response_data = json.loads(response.read().decode())
+                return {
+                    "output_text": response_data.get("content", "").strip()
+                }
             
         elif self.target.accelerator == Accelerator.NPU:
             if self.model is None:
@@ -835,7 +890,7 @@ class TinyLlamaPipeline:
 
     def decode(self, logits: Dict[str, Any], top_k: int = 5) -> List[Dict[str, object]]:
         printv("Decodificando resultados de inferencia")
-        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.GPU or self.target.accelerator == Accelerator.TPU:
+        if self.target.accelerator == Accelerator.CPU or self.target.accelerator == Accelerator.TPU:
             tokenizer = self.tokenizer # Guardamos en variable local para evitar problemas de acceso
             if tokenizer is None:
                 raise RuntimeError("El modelo todavía no está cargado")
@@ -862,7 +917,7 @@ class TinyLlamaPipeline:
 
             return predictions
         
-        elif self.target.accelerator == Accelerator.NPU:
+        elif self.target.accelerator == Accelerator.GPU or self.target.accelerator == Accelerator.NPU:
             return [
                 {
                     "text": logits["output_text"]
@@ -883,6 +938,10 @@ class TinyLlamaPipeline:
         if self.model is None:
             printv("El modelo ya estaba descargado")
             return
+        
+        if self.target.accelerator == Accelerator.GPU:
+            self.model.terminate()
+            self.model.wait()
         
         if self.target.accelerator == Accelerator.NPU:
             self.model.release()
@@ -928,10 +987,11 @@ class StableDiffusion15Pipeline:
                 feature_extractor=None,
                 requires_safety_checker=False,
             )
-
-            self.model.to(self.target.device)
-            self.model.enable_attention_slicing()
-            self.model.set_progress_bar_config(disable=True)
+            
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
         elif self.target.accelerator == Accelerator.NPU:
             scheduler_config_path = str(self.model_folder_path / "scheduler" / "scheduler_config.json")
@@ -1008,6 +1068,7 @@ class StableDiffusion15Pipeline:
                 height=self.height,
                 width=self.width,
                 generator=generator,
+                torch_device=self.target.device
             )
 
             image: Any = result.images[0]
@@ -1168,13 +1229,18 @@ class RNNTPipeline:
 
             model_path = self._resolve_model_path()
             printv("Iniciando restore_from de NeMo...")
-            loaded_model: Any = ASRModel.restore_from(
+            loaded_model: Any = EncDecRNNTBPEModel.restore_from(
                 restore_path=str(model_path),
                 map_location=self.target.device,
             )
             self.model = loaded_model
             model: Any = self.model
             model.eval()
+            
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
         elif self.target.accelerator == Accelerator.NPU:
             self.model = [RKNNLite(), RKNNLite()]
