@@ -39,6 +39,17 @@ class InferenceRunner:
         Metrics.print_metrics()
         Metrics.export_metrics_csv(f"results/metrics_{self.model_identifier.value}_{self.accelerator_identifier.value}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv")
     
+    def run_preview_alt(self, max_samples: int, top_k: int):
+        sample = self.dataset_adapter.iter_samples(limit=1)[0]
+        
+        if not sample:
+            print("No se encontraron muestras en el dataset")
+            return
+        
+        self.model_pipeline.infer_alt(sample=sample, max_samples=max_samples)
+        Metrics.print_metrics()
+        Metrics.export_metrics_csv(f"results/metrics_{self.model_identifier.value}_{self.accelerator_identifier.value}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv")
+    
     def print_inference(self, sample, predictions):
         print("-" * 50)
         print(f"Muestra: {sample.path.name}")

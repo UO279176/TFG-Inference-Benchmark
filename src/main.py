@@ -81,7 +81,12 @@ if __name__ == "__main__":
             model_identifier=model_identifier,
             accelerator_identifier=execution_target.accelerator
         )
-        runner.run_preview(max_samples=num_samples, top_k=5)
+        
+        if accelerator_identifier == Accelerator.GPU and model_identifier == Model.STABLE_DIFFUSION:
+            print("Ejecución alternativa de inferencia detectada")
+            runner.run_preview_alt(max_samples=num_samples, top_k=5)
+        else:
+            runner.run_preview(max_samples=num_samples, top_k=5)
 
         print("Inferencia completada exitosamente")
         

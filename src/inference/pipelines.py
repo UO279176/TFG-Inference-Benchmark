@@ -1157,6 +1157,69 @@ class StableDiffusion15Pipeline:
         model_inputs = self.preprocess(sample)
         output = self.predict(model_inputs)
         return self.decode(output, top_k=top_k)
+    
+    def infer_alt(self, sample, max_samples: int = 1):
+        import re
+        from inference.metrics import Metrics
+        
+        print(f"Ejecutando Stable Diffusion y creando {max_samples} imágenes con el prompt: {sample.prompt}")
+        
+        self.output_folder_path.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_base_path = self.output_folder_path / f"prompt_001_{timestamp}_{self.width}x{self.height}.png"
+
+        command = [
+            "src/data/bin/stable-diffusion-cli",
+            "-m", str(self.model_folder_path / "stable-diffusion-v1-5-pruned-emaonly-f16.gguf"),
+            "-W", str(self.width), 
+            "-H", str(self.height),
+            "--steps", str(self.num_inference_steps),
+            "--cfg-scale", str(self.guidance_scale),
+            "--seed", str(self.seed),
+            "--vae-tiling",
+            "-p", sample.prompt,
+            "-b", str(max_samples),
+            "-o", str(output_base_path)
+        ]
+        
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        
+        regex_unet = re.compile(r"sampling completed, taking\s+([\d\.]+)s")
+        regex_vae = re.compile(r"latent\s+\d+\s+decoded, taking\s+([\d\.]+)s")
+        
+        unet_time = 0.0
+        monitoring_active = False
+        inference_count = 0
+        
+        for line in process.stdout:
+            # Carga del modelo
+            if "generating image: 1/" in line and not monitoring_active:
+                printv("Modelo cargado, iniciando recolección de métricas")
+                Metrics.start_monitoring(interval_seconds=1.0)
+                monitoring_active = True
+            
+            # Tiempo UNET (generación)
+            match_unet = regex_unet.search(line)
+            if match_unet:
+                unet_time = float(match_unet.group(1))
+                
+            # Tiempo VAE (decodificación)
+            match_vae = regex_vae.search(line)
+            if match_vae:
+                vae_time = float(match_vae.group(1))
+                total_time = unet_time + vae_time
+                Metrics.add_inference_time(total_time)
+                inference_count += 1
+                print(f"Imagen {inference_count} de {max_samples} ({total_time:.2f}s)...", end="\r", flush=True)
+                
+        process.wait()
+        
+        if monitoring_active:
+            Metrics.stop_monitoring()
+            printv("Batch completado y métricas detenidas, se procesaron {} imágenes".format(inference_count))
+        
+        process.terminate()
+        process.wait()
 
     def unload(self) -> None:
         printv("Descargando modelo de memoria")
