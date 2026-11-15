@@ -2,34 +2,21 @@ import sys
 from pathlib import Path
 import time
 
-from inference.metrics import Metrics
+from human_detection_app.metrics_with_precision import MetricsP
 from human_detection_app.pipeline import MobileNetPipeline
 from human_detection_app.dataset import load_dataset
 from human_detection_app.dataclasses import HumanImageSample, InferenceResult
+from human_detection_app.constants import HUMAN_ID_COCO, HUMAN_DETECTION_DATASET_PATH, get_model_path
 
-def get_model_path():
-    if accelerator == "cpu":
-        model_path = "src/data/models/mobilenet/ssd_mobilenet_v2_coco_quant_postprocess.tflite"
-    elif accelerator == "gpu":
-        model_path = "src/data/models/mobilenet/ssd_mobilenet_v2_coco_quant_postprocess.tflite"
-    elif accelerator == "npu":
-        model_path = "src/data/models/mobilenet/ssd_mobilenet_v2_coco_quant_postprocess.tflite"
-    elif accelerator == "tpu":
-        model_path = "src/data/models/mobilenet/ssd_mobilenet_v2_coco_quant_postprocess.tflite"
-    else:
-        raise ValueError(f"Tipo de acelerador no válido: {accelerator}")
-    return Path(model_path)
-
-# TODO: Comparar resultados con ground truth
-def clean_results(result: InferenceResult):
-    # Filtrar resultados con categoría igual a 0 (humano) y score mayor o igual a 0.5
+def clean_results(result: InferenceResult, score_threshold=0.5):
+    # Filtrar resultados para solo tener los correspondientes a humanos y con score mayor o igual a 0.5
     filtered_locations = []
     filtered_categories = []
     filtered_scores = []
     filtered_number = 0
 
     for loc, cat, score in zip(result.locations, result.categories, result.scores):
-        if cat == 0 and score >= 0.5:
+        if cat == HUMAN_ID_COCO and score >= score_threshold:
             filtered_locations.append(loc)
             filtered_categories.append(cat)
             filtered_scores.append(score)
@@ -43,35 +30,39 @@ def clean_results(result: InferenceResult):
     )
 
 def show_results(i: int, sample: HumanImageSample, result: InferenceResult):
-    print(f"--- Muestra {i + 1} ({sample.path}), presencia humana: {sample.human_present} ---")
+    print(f"--- Muestra {i + 1} ({sample.path}), humanos reales: {sample.human_count} ---")
+    if sample.human_count > 0:
+        print(f"Ubicaciones reales de los humanos: {sample.bboxes}")
+    print()
     print(f"Número de humanos detectados: {result.number}")
     print(f"Ubicaciones de los humanos detectados: {result.locations}")
-    print(f"Categorías de los humanos detectados: {result.categories}")
     print(f"Puntuaciones de los humanos detectados: {result.scores}")
+    print("=" * 50)
     
 
 if __name__ == "__main__":
-    labels_path = Path("src/data/labels/coco-labels-2014_2017.txt")
-    dataset_path = Path("src/data/datasets/human_detection")
+    dataset_path = Path(HUMAN_DETECTION_DATASET_PATH)
     accelerator = sys.argv[1]
-    model_path = get_model_path()
+    model_path = get_model_path(accelerator)
     samples = load_dataset(dataset_path)
     
-    pipeline = MobileNetPipeline(model_path=model_path, labels_path=labels_path, accelerator=accelerator)
+    pipeline = MobileNetPipeline(model_path, accelerator)
     pipeline.load()
 
-    Metrics.start_monitoring(interval_seconds=1.0)
+    MetricsP.start_monitoring(interval_seconds=1.0)
     
     for i, sample in enumerate(samples):
         start_time = time.monotonic()
         inference_result = InferenceResult(*pipeline.infer(sample.path))
         inference_result = clean_results(inference_result)
-        show_results(i, sample, inference_result)
+        # TODO: Simular un sistema de gestión de salida y almacenamiento de resultados
         end_time = time.monotonic()
-        Metrics.add_inference_time(end_time - start_time) # TODO: Añadir también si acertó la inferencia o falló (es acertado cuando uno de los boxes indica la posición de un humano si el sample contenía un humano o si no se detectaron humanos en un sample donde no hay humanos)
+        # show_results(i, sample, inference_result)
+        MetricsP.add_inference_time(end_time - start_time)
+        MetricsP.add_inference_results(sample, inference_result)
         
-    Metrics.stop_monitoring()
+    MetricsP.stop_monitoring()
     pipeline.unload()
     
-    Metrics.print_metrics()
-    Metrics.export_metrics_csv(f"results/metrics_mobilenet_{accelerator}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv")
+    MetricsP.print_metrics()
+    MetricsP.export_metrics_csv(f"results/metrics_mobilenet_{accelerator}_{time.strftime('%Y-%m-%d_%H-%M-%S')}.csv")

@@ -1,11 +1,21 @@
+import json
 from pathlib import Path
-from PIL import Image
 
 from human_detection_app.dataclasses import HumanImageSample
+from human_detection_app.constants import HUMAN_DETECTION_DATA_BBOX_JSON
 
 def load_dataset(dataset_path: Path):
     if not dataset_path.exists():
         raise FileNotFoundError(f"No se encontró el dataset en: {dataset_path}")
+
+    bbox_path = dataset_path / HUMAN_DETECTION_DATA_BBOX_JSON
+    if not bbox_path.exists():
+        raise FileNotFoundError(f"No se encontró el fichero de bounding boxes: {bbox_path}")
+
+    bbox_annotations = {}
+    with bbox_path.open("r", encoding="utf-8") as file:
+        for item in json.load(file):
+            bbox_annotations[item["file_name"]] = item["bbox"]
 
     samples = []
     for human_present in [0, 1]: # Dos subcarpetas: 0 (sin humanos) y 1 (con humanos)
@@ -14,6 +24,7 @@ def load_dataset(dataset_path: Path):
             raise FileNotFoundError(f"No se encontró la subcarpeta: {subfolder}")
 
         for image_file in subfolder.glob("*.png"):
-            samples.append(HumanImageSample(image_file, bool(human_present)))
+            bboxes = bbox_annotations.get(image_file.name, []) if human_present else []
+            samples.append(HumanImageSample(image_file, len(bboxes), bboxes))
     
-    return samples[920:921] # TODO: Quitar límite
+    return samples

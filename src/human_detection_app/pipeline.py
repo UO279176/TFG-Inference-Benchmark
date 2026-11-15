@@ -3,22 +3,16 @@ import numpy as np
 from PIL import Image
 
 class MobileNetPipeline:
-    def __init__(self, model_path: Path, labels_path: Path, accelerator: str):
+    def __init__(self, model_path: Path, accelerator: str):
         self.model_path = model_path
-        self.labels_path = labels_path
         self.accelerator = accelerator
         
         self.image_size = 300
-        self.labels = self._load_labels()
         
         self.interpreter = None
         self.input_index = None
         self.input_dtype = None
         self.output_indices = None
-
-    def _load_labels(self):
-        with self.labels_path.open("r", encoding="utf-8") as f:
-            return [line.strip() for line in f if line.strip()]
 
     def load(self):
         if not self.model_path.exists():
