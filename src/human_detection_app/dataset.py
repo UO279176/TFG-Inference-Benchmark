@@ -4,7 +4,7 @@ from pathlib import Path
 from human_detection_app.dataclasses import HumanImageSample
 from human_detection_app.constants import HUMAN_DETECTION_DATA_BBOX_JSON
 
-def load_dataset(dataset_path: Path):
+def load_dataset(dataset_path: Path, num_samples=None):
     if not dataset_path.exists():
         raise FileNotFoundError(f"No se encontró el dataset en: {dataset_path}")
 
@@ -26,5 +26,11 @@ def load_dataset(dataset_path: Path):
         for image_file in subfolder.glob("*.png"):
             bboxes = bbox_annotations.get(image_file.name, []) if human_present else []
             samples.append(HumanImageSample(image_file, len(bboxes), bboxes))
+            if num_samples: # Si se especifica un máximo de muestras, obtener la mitad de cada subcarpeta
+                if human_present == 0 and len(samples) >= num_samples // 2:
+                    break
+                elif human_present == 1 and len(samples) >= num_samples:
+                    break
+                
     
     return samples

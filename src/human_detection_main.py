@@ -63,8 +63,9 @@ def show_results(i: int, sample: HumanImageSample, result: InferenceResult):
 if __name__ == "__main__":
     dataset_path = Path(HUMAN_DETECTION_DATASET_PATH)
     accelerator = sys.argv[1]
+    num_samples = int(sys.argv[2]) if len(sys.argv) > 2 else None
     model_path = get_model_path(accelerator)
-    samples = load_dataset(dataset_path)
+    samples = load_dataset(dataset_path, num_samples)
     
     pipeline = MobileNetPipeline(model_path, accelerator)
     pipeline.load()
