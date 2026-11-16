@@ -37,6 +37,25 @@ class MobileNetPipeline:
             self.output_indices = [
                 detail["index"] for detail in self.interpreter.get_output_details()
             ]
+        
+        elif self.accelerator == "tpu":
+            from tflite_runtime.interpreter import load_delegate, Interpreter
+            from human_detection_app.constants import EDGETPU_LIB_PATH
+            
+            delegate = load_delegate(EDGETPU_LIB_PATH)
+            
+            self.interpreter = Interpreter(
+                model_path=str(self.model_path),
+                experimental_delegates=[delegate]
+            )
+            self.interpreter.allocate_tensors()
+            
+            input_details = self.interpreter.get_input_details()[0]
+            self.input_index = input_details["index"]
+            self.input_dtype = np.dtype(input_details["dtype"])
+            self.output_indices = [
+                detail["index"] for detail in self.interpreter.get_output_details()
+            ]
 
     def preprocess(self, image_path: Path):
         if self.interpreter is None:
