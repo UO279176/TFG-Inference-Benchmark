@@ -19,11 +19,16 @@ class MobileNetPipeline:
             raise FileNotFoundError(f"No se encontró el modelo en: {self.model_path}")
 
         if self.accelerator == "cpu":
+            import os
             import tensorflow as tf
+            
             device = "/CPU:0"
 
             with tf.device(device):
-                self.interpreter = tf.lite.Interpreter(model_path=str(self.model_path))
+                self.interpreter = tf.lite.Interpreter(
+                    model_path=str(self.model_path),
+                    num_threads=os.cpu_count()
+                )
                 self.interpreter.allocate_tensors()
 
             input_details = self.interpreter.get_input_details()[0]
