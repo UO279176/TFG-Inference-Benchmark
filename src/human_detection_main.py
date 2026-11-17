@@ -34,7 +34,7 @@ def clean_results(result: InferenceResult, score_threshold=0.5):
     filtered_categories = []
     filtered_scores = []
     filtered_number = 0
-
+    
     for loc, cat, score in zip(result.locations, result.categories, result.scores):
         if cat == HUMAN_ID_COCO and score >= score_threshold:
             filtered_locations.append(loc)
@@ -57,6 +57,7 @@ def show_results(i: int, sample: HumanImageSample, result: InferenceResult):
     print(f"Número de humanos detectados: {result.number}")
     print(f"Ubicaciones de los humanos detectados: {result.locations}")
     print(f"Puntuaciones de los humanos detectados: {result.scores}")
+    print(f"Categorías de los humanos detectados: {result.categories}")
     print("=" * 50)
     
 

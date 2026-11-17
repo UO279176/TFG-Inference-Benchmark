@@ -9,7 +9,7 @@ def get_model_path(accelerator: str):
     if accelerator == "cpu":
         model_path = "src/data/models/mobilenet/ssd_mobilenet_v2_coco_quant_postprocess.tflite"
     elif accelerator == "gpu":
-        model_path = "src/data/models/mobilenet/ssd_mobilenet_v2_coco_quant_postprocess.tflite"
+        model_path = "src/data/models/mobilenet/saved_model"
     elif accelerator == "npu":
         model_path = "src/data/models/mobilenet/ssd_mobilenet_v2_coco_quant_postprocess.tflite"
     elif accelerator == "tpu":

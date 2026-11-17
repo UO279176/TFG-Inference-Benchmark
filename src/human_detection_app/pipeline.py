@@ -14,6 +14,8 @@ class MobileNetPipeline:
         self.input_dtype = None
         self.output_indices = None
 
+        self.tensorflow = None
+
     def load(self):
         if not self.model_path.exists():
             raise FileNotFoundError(f"No se encontró el modelo en: {self.model_path}")
@@ -22,9 +24,7 @@ class MobileNetPipeline:
             import os
             import tensorflow as tf
             
-            device = "/CPU:0"
-
-            with tf.device(device):
+            with tf.device("/CPU:0"):
                 self.interpreter = tf.lite.Interpreter(
                     model_path=str(self.model_path),
                     num_threads=os.cpu_count()
@@ -37,6 +37,25 @@ class MobileNetPipeline:
             self.output_indices = [
                 detail["index"] for detail in self.interpreter.get_output_details()
             ]
+        
+        elif self.accelerator == "gpu":
+            import tensorflow as tf
+            self.tensorflow = tf
+
+            gpus = tf.config.list_physical_devices("GPU")
+            if not gpus:
+                raise RuntimeError("Se pidió GPU pero TensorFlow no detecta ninguna GPU")
+            
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+
+            with tf.device("/GPU:0"):
+                saved_model = tf.saved_model.load(str(self.model_path))
+                self.interpreter = saved_model.signatures["serving_default"]
+
+            input_signature = self.interpreter.structured_input_signature[1]
+            _, input_spec = next(iter(input_signature.items()))
+            self.input_dtype = np.dtype(input_spec.dtype.as_numpy_dtype)
         
         elif self.accelerator == "tpu":
             from tflite_runtime.interpreter import load_delegate, Interpreter
@@ -71,14 +90,28 @@ class MobileNetPipeline:
     def predict(self, model_inputs):
         if self.interpreter is None:
             raise RuntimeError("El modelo todavía no está cargado")
-
-        self.interpreter.set_tensor(self.input_index, model_inputs)
-        self.interpreter.invoke()
         
-        results = []
-        for output_index in self.output_indices:
-            results.append(self.interpreter.get_tensor(output_index))
-        return results
+        if self.accelerator == "cpu" or self.accelerator == "tpu":
+            self.interpreter.set_tensor(self.input_index, model_inputs)
+            self.interpreter.invoke()
+            
+            results = []
+            for output_index in self.output_indices:
+                results.append(self.interpreter.get_tensor(output_index))
+            return results
+        
+        elif self.accelerator == "gpu":
+            with self.tensorflow.device("/GPU:0"):
+                outputs = self.interpreter(
+                    inputs=self.tensorflow.constant(model_inputs, dtype=self.input_dtype)
+                )
+            
+            number = int(outputs["num_detections"].numpy())
+            locations = outputs["detection_boxes"].numpy()[0][:number]
+            categories = outputs["detection_classes"].numpy()[0][:number] - 1
+            scores = outputs["detection_scores"].numpy()[0][:number]
+            
+            return [locations], [categories], [scores], number
 
     def decode(self, logits):
         if len(logits) != 4:
