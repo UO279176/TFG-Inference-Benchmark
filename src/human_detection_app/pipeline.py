@@ -156,7 +156,7 @@ class MobileNetPipeline:
             
 
     def decode(self, logits):
-        if self.accelerator == "cpu" or self.accelerator == "gpu" or self.accelerator == "tpu":
+        if self.accelerator == "cpu" or self.accelerator == "tpu":
             if len(logits) != 4:
                 raise RuntimeError(f"Se esperaban 4 salidas de detección y se recibieron {len(logits)}")
     
