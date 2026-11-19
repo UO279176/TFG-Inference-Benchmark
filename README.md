@@ -7,16 +7,19 @@ Para ejecutar el benchmark, usar el comando:
 ```python3 src/main.py <acelerador> <modelo> <num_muestras> [-v]```<br/>
 - `<acelerador>`: Identificador del acelerador a usar (CPU, GPU, NPU, TPU).<br/>
 - `<modelo>`: Identificador del modelo a usar (Comprobar strings de la clase Model en src/data.py).<br/>
--`<num_muestras>`: Número de muestras a procesar del dataset.<br/>
+- `<num_muestras>`: Número de muestras a procesar del dataset.<br/>
 - `-v | --verbose`: (Opcional) Modo verbose, muestra información detallada de cada muestra procesada, como resultados de predicción y por qué paso del pipeline se encuentra.
-<br/>
+
 Para ejecutar la aplicación de detección de humanos en imágenes CCTV, usar el comando:
 ```python3 src/human_detection_main.py <acelerador> [<num_muestras>]```<br/>
 - `<acelerador>`: Identificador del acelerador a usar (CPU, GPU, NPU, TPU).<br/>
 - `<num_muestras>`: (Opcional) Número de muestras a procesar del dataset. Si no se especifica, se procesarán todas las muestras disponibles.
 
 ## Preparación del entorno y ejecución
-Para preparar el entorno de ejecución se utilizará Docker y se deben seguir los siguientes pasos:
+> [!WARNING]
+> Se dejó de utilizar Docker para la ejecución de los benchmarks porque el desarrollo estaba siendo ralentizado por culpa de este programa. Se recomienda ejecutar los benchmarks de forma manual ya que esta sección de la documentación está desactualizada.
+
+Para preparar el entorno de ejecución se puede utilizar Docker y se deben seguir los siguientes pasos:
 1. Asegurarse de tener Docker instalado y en funcionamiento.
 2. Clonar el repositorio:
 ```git clone https://github.com/UO279176/TFG-Inference-Benchmark.git```
@@ -39,7 +42,15 @@ Para preparar el entorno de ejecución se utilizará Docker y se deben seguir lo
 Ejecutar el contenedor sin parámetros mostrará la ayuda con las opciones disponibles.
 
 ## Alternativa manual sin Docker
-En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker ha dado problemas en algún paso, se puede instalar y ejecutar manualmente el entorno:
+En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker ha dado problemas en algún paso, se puede instalar y ejecutar manualmente el entorno.
+
+- Forma general:
+1. Crear un entorno virtual de Python 3.10:<br/>
+```python3 -m venv venv```
+2. Activar el entorno virtual:<br/>
+```source venv/bin/activate```
+3. Instalar las dependencias en el siguiente orden:<br/>
+```pip3 install <requierements.txt que se quiera usar>```
 
 - Para la GPU de la Jetson AGX Orin y Jetson Orin Nano:
 1. Crear un entorno virtual de Python:<br/>
@@ -77,4 +88,4 @@ En caso de no querer usar Docker, ya sea por comodidad o porque el uso de Docker
 ### Notas adicionales
 La carpeta `src/data` no se copia dentro de la imagen para reducir su tamaño. Debe existir en el host y montarse al arrancar el contenedor.
 La carpeta `results` también debe montarse si se quiere conservar los CSV generados fuera del contenedor.
-Los modelos específicos para un acelerador en concreto se encuentran en la carpeta `src/data/models/<acelerador>` y siguen la misma estructura de carpetas que los modelos generales.
+Los modelos específicos para un acelerador en concreto se encuentran en la carpeta `src/data/models/<acelerador>` y siguen la misma estructura de carpetas que los modelos generales, excepto para GPU que usa la misma carpeta que CPU.

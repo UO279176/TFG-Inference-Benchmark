@@ -218,3 +218,5 @@ src/data/bin/*
 !src/data/models/models.txt
 !src/data/libs/libs.txt
 !src/data/bin/bin.txt
+
+results/
