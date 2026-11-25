@@ -23,7 +23,7 @@ def load_dataset(dataset_path: Path, num_samples=None):
         if not subfolder.exists():
             raise FileNotFoundError(f"No se encontró la subcarpeta: {subfolder}")
 
-        for image_file in subfolder.glob("*.png"):
+        for image_file in sorted(subfolder.glob("*.png")):
             bboxes = bbox_annotations.get(image_file.name, []) if human_present else []
             samples.append(HumanImageSample(image_file, len(bboxes), bboxes))
             if num_samples: # Si se especifica un máximo de muestras, obtener la mitad de cada subcarpeta
